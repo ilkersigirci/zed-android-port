@@ -1,103 +1,45 @@
-//! Shared storage access for Android.
-//!
-//! Projects under the app files dir need no permission. Raw `/sdcard`
-//! paths (a folder picked from external storage, the `~/storage` links)
-//! do: on Android 8 to 10 the runtime-prompted `READ/WRITE_EXTERNAL_STORAGE`
-//! grants, on Android 11+ "All files access" (`MANAGE_EXTERNAL_STORAGE`), a
-//! per-app toggle in system settings rather than a dialog. SAF folder
-//! picking dodges this for tree access, but the moment `RealFs` reads
-//! `/storage/emulated/0/projects/foo.rs` directly, the syscall fails with
-//! `EACCES` until the user has granted it.
-//!
-//! This module is the JNI bridge to `MainActivity.requestStoragePermissions`
-//! (asked once at boot) and `requestAllFilesAccess` (the settings page
-//! action). Fire-and-forget by design: a denial leaves file ops on
-//! `/sdcard` failing with a clean error until granted.
+//! Shared storage access for Android. Projects under the app files dir need
+//! no permission. Raw `/sdcard` paths (the `~/storage` links, or a folder opened
+//! there) need "All files access", a per-app toggle in system settings, or the
+//! syscalls fail with `EACCES`. `MainActivity.requestStoragePermissions` asks
+//! once at boot and `requestAllFilesAccess` backs the settings page's action.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use android_activity::AndroidApp;
-use anyhow::{Context, Result};
+use anyhow::Result;
 
-static REQUESTED: OnceLock<()> = OnceLock::new();
-
-/// Fire the `requestStoragePermissions()` JNI call once per process. Logs
-/// the result code (1 = granted, 0 = dialog or settings screen opened,
-/// 2 = not granted and nothing shown). Re-entry from activity recreation
-/// is a no-op via `OnceLock`.
+/// Opens the "All files access" toggle once per install; see the module docs.
 pub fn request_once(android_app: &AndroidApp) {
-    if REQUESTED.get().is_some() {
-        return;
-    }
-    match request_inner(android_app) {
-        Ok(code) => {
-            log::info!(
-                "storage: requestStoragePermissions returned {} ({})",
-                code,
-                match code {
-                    1 => "granted",
-                    0 => "dialog or settings screen opened",
-                    _ => "not granted, asked before",
-                }
-            );
-            let _ = REQUESTED.set(());
-        }
-        Err(err) => {
-            // Don't latch the OnceLock on failure — let the next android_main
-            // re-entry try again. Failures here are usually JNI thread-attach
-            // races during early boot and recover after lifecycle settles.
-            log::warn!("storage: requestStoragePermissions failed: {err:#}");
-        }
+    let result = crate::jni_env::call_window_method(
+        android_app,
+        None,
+        "requestStoragePermissions",
+        "()V",
+        &[],
+    );
+    if let Err(err) = result {
+        log::warn!("storage: requestStoragePermissions failed: {err:#}");
     }
 }
 
-fn request_inner(android_app: &AndroidApp) -> Result<i32> {
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        let result = env
-            .call_method(activity, "requestStoragePermissions", "()I", &[])
-            .context("MainActivity.requestStoragePermissions")?
-            .i()?;
-        Ok(result)
-    })
-}
-
-/// Open the system "All files access" toggle (Android 11+) or the storage
-/// permission dialog on older releases. Returns `true` when a screen opened
-/// or access already holds.
+/// Opens the system "All files access" toggle. Returns `true` when a screen
+/// opened or access already holds.
 pub fn request_all_files_access() -> Result<bool> {
-    let android_app = crate::updater::android_app()?;
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        Ok(env
-            .call_method(activity, "requestAllFilesAccess", "()Z", &[])
-            .context("MainActivity.requestAllFilesAccess")?
-            .z()?)
-    })
+    crate::jni_env::call_main_activity_bool("requestAllFilesAccess")
 }
 
-/// `ActivityManager.clearApplicationUserData`, Android's own Clear storage:
-/// deletes all of the app's data and ends the process. Returns `false` when
-/// Android refused.
+/// Android's own Clear storage for this app: deletes all of its data and ends
+/// the process. Backs the clean start an install from before 0.10 needs.
 pub fn clear_app_data() -> Result<bool> {
-    let android_app = crate::updater::android_app()?;
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        Ok(env
-            .call_method(activity, "clearAppData", "()Z", &[])
-            .context("MainActivity.clearAppData")?
-            .z()?)
-    })
+    crate::jni_env::call_main_activity_bool("clearAppData")
 }
 
-/// Opens the home folder, the documents provider's root, in Android's Files
-/// app. Returns `false` when no app handles it.
+/// Opens the home folder in Android's Files app. Returns `false` when no app
+/// opens the documents provider's root.
 pub fn open_home_in_files() -> Result<bool> {
-    let android_app = crate::updater::android_app()?;
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        Ok(env
-            .call_method(activity, "openHomeInFiles", "()Z", &[])
-            .context("MainActivity.openHomeInFiles")?
-            .z()?)
-    })
+    crate::jni_env::call_main_activity_bool("openHomeInFiles")
 }
 
 /// `storage/` symlinks into shared storage, in the app's home folder.

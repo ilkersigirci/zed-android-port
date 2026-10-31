@@ -124,10 +124,6 @@ object NativeBridge {
     /// extra window's id for spawned windows.
     external fun isHoldDragActive(windowId: Long): Boolean
 
-    /// MainActivity polls this flag to fade out its splash overlay after
-    /// gpui's first paint. The UI and gpui run on different threads.
-    external fun nativeIsZedReady(): Boolean
-
     /// Captured-pointer sink, called only by [forwardCapturedPointer].
     /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
     /// window's id. `rxs`/`rys` are `AXIS_RELATIVE_X` /

@@ -278,7 +278,7 @@ You'll need:
 cd crates/gpui_android/examples/zed_android
 
 ANDROID_NDK_HOME=/path/to/ndk/27.0.12077973 \
-  cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build
+  cargo ndk -t arm64-v8a -P 31 -o android/app/src/main/jniLibs build
 
 cd android
 gradle assembleDebug

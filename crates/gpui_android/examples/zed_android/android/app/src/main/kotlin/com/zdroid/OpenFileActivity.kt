@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
@@ -188,9 +187,7 @@ internal object OpenedFiles {
     }
 
     private fun copyMessage(): String {
-        val sharedStorageBlocked = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            !Environment.isExternalStorageManager()
-        return if (sharedStorageBlocked) {
+        return if (!Environment.isExternalStorageManager()) {
             "Opened a copy in ~/received. To edit files where they are, turn on " +
                 "Settings → Android → Allow Access to /sdcard."
         } else {

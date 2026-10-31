@@ -17,9 +17,6 @@
 //!   state (mouse + touch both use the run-tracking).
 //! - [`keyboard`] for hardware keys (entry points
 //!   [`translate_key_event`] and [`translate_extra_key_event`]).
-//!
-//! IME / soft-keyboard composition will land in its own module
-//! (see `docs/workarounds/deferred-soft-keyboard.md`).
 
 pub(crate) mod click_track;
 pub(crate) mod keyboard;
@@ -70,6 +67,8 @@ pub(crate) const JAVA_ACTION_POINTER_UP: i32 = 6;
 pub(crate) const JAVA_ACTION_HOVER_MOVE: i32 = 7;
 pub(crate) const JAVA_ACTION_SCROLL: i32 = 8;
 pub(crate) const JAVA_ACTION_HOVER_ENTER: i32 = 9;
+pub(crate) const JAVA_ACTION_BUTTON_PRESS: i32 = 11;
+pub(crate) const JAVA_ACTION_BUTTON_RELEASE: i32 = 12;
 
 /// Java `MotionEvent.TOOL_TYPE_PALM`, for the same reason.
 pub(crate) const JAVA_TOOL_TYPE_PALM: i32 = 5;
@@ -148,7 +147,8 @@ pub(crate) fn translate_motion_event(
         MotionAction::Up => {
             // Mouse button release. Resolve the latched click.
             if let click_track::UpOutcome::Emit(button) = state.clicks.finalize_up() {
-                out.push(mouse::button_up(button, position, modifiers));
+                let click_count = state.clicks.click_count();
+                out.push(mouse::button_up(button, position, modifiers, click_count));
             }
         }
         MotionAction::Move => {

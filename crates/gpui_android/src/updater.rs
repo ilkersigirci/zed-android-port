@@ -11,7 +11,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
@@ -22,27 +22,7 @@ use jni::{
     sys::jboolean,
 };
 
-use crate::jni_env::with_activity;
-
-/// Process-global AndroidApp handle. Set once at boot via
-/// [`register_android_app`] by `gpui_android::run`; read by the public
-/// updater functions so callers (lib.rs action handler, auto-check
-/// task) don't have to thread an `AndroidApp` reference through their
-/// own state.
-static ANDROID_APP: OnceLock<AndroidApp> = OnceLock::new();
-
-/// Stash the AndroidApp for later use by the updater. Idempotent (the
-/// second set is silently dropped) so re-entry across Activity
-/// recreations doesn't error.
-pub fn register_android_app(app: AndroidApp) {
-    let _ = ANDROID_APP.set(app);
-}
-
-pub(crate) fn android_app() -> Result<&'static AndroidApp> {
-    ANDROID_APP
-        .get()
-        .ok_or_else(|| anyhow!("updater: AndroidApp not registered yet"))
-}
+use crate::jni_env::{android_app, call_main_activity_bool, with_activity};
 
 /// Repo we ship APK releases from. Kept here (not in a config file)
 /// so a malicious user-config tweak can't redirect the auto-updater
@@ -405,11 +385,7 @@ fn take_sender<T>(slot: &Mutex<Option<oneshot::Sender<T>>>) -> Option<oneshot::S
 
 /// Whether Android lets Zdroid install APKs ("Install unknown apps").
 pub fn can_install_updates() -> Result<bool> {
-    with_activity(android_app()?, |env, activity| {
-        Ok(env
-            .call_method(activity, "canInstallUpdates", "()Z", &[])?
-            .z()?)
-    })
+    call_main_activity_bool("canInstallUpdates")
 }
 
 /// Opens Zdroid's "Install unknown apps" settings page. The receiver
@@ -468,11 +444,7 @@ pub fn install_update(apk_path: &Path) -> Result<oneshot::Receiver<InstallOutcom
 /// case it ended up behind other apps. Returns false if Android hasn't
 /// asked yet.
 pub fn show_install_prompt() -> Result<bool> {
-    with_activity(android_app()?, |env, activity| {
-        Ok(env
-            .call_method(activity, "showUpdatePrompt", "()Z", &[])?
-            .z()?)
-    })
+    call_main_activity_bool("showUpdatePrompt")
 }
 
 #[unsafe(no_mangle)]

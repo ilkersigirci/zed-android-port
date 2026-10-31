@@ -15,10 +15,6 @@
 //! Per-window owned (lives as a field on `AndroidWindowState`). Each
 //! window has its own click state so a tap in window A doesn't bleed
 //! into window B's double-click run.
-//!
-//! Renamed from `events/touch.rs` once `crate::touch` arrived: the
-//! state here is actually generic click-tracking shared between
-//! modalities, not touch-specific.
 
 use std::time::Instant;
 
@@ -103,6 +99,12 @@ impl ClickTrackState {
             );
         }
         count
+    }
+
+    /// The run length of the last Down. gpui reads a click's count from its
+    /// `MouseUp`, so the Up has to carry it too.
+    pub(crate) fn click_count(&self) -> usize {
+        self.last_click.map_or(1, |(_, _, _, count)| count)
     }
 
     /// Resolve the gesture-closing Up. Held non-primary wins (so e.g. a

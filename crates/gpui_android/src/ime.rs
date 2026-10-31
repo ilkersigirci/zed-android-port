@@ -13,18 +13,14 @@
 //! every IME event onto an mpsc channel and the game thread drains it
 //! each iteration of the main loop (same pattern as `multi_window`
 //! and `captured_pointer`). Show/hide IME goes the other direction —
-//! Rust → Kotlin — via direct JNI calls on `MainActivity.requestIme()` /
-//! `hideIme()`.
+//! Rust → Kotlin — via direct JNI calls on the Activity's `requestIme`.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 
-/// Mirror of Kotlin's `imeShown` flag pushed via the
-/// `nativeSetSoftKeyboardVisible` JNI entry point. Read through
-/// `gpui_android::soft_keyboard_visible` so the status bar keyboard
-/// button can draw its lit-up `toggle_state`. Process-wide because
-/// the IME host is a single ImeHostView shared across all panes
-/// of the primary Activity.
+/// Whether the on-screen keyboard is showing, which `WindowIme.kt` pushes
+/// through `nativeSetSoftKeyboardVisible`, for the status bar keyboard button.
+/// Process-wide, because only one keyboard can be up at a time.
 pub(crate) static SOFT_KEYBOARD_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn soft_keyboard_visible() -> bool {
@@ -138,7 +134,7 @@ use android_activity::AndroidApp;
 use anyhow::Context as _;
 use futures::channel::mpsc;
 use jni::JNIEnv;
-use jni::objects::{JObject, JString, JValue};
+use jni::objects::{JObject, JString};
 
 use crate::window::AndroidWindowStatePtr;
 
@@ -207,36 +203,16 @@ pub(crate) fn restart_input_for_kind(
         "ime::restart_input_for_kind w={extra_window_id:?} kind={:?}",
         kind
     );
-    if let Err(err) = call_activity_restart_ime(android_app, extra_window_id, kind.to_jni_int()) {
+    let result = crate::jni_env::call_window_method(
+        android_app,
+        extra_window_id,
+        "restartImeForTarget",
+        "(I)V",
+        &[kind.to_jni_int().into()],
+    );
+    if let Err(err) = result {
         log::warn!("ime::restart_input_for_kind failed: {err:#}");
     }
-}
-
-fn call_activity_restart_ime(
-    android_app: &AndroidApp,
-    extra_window_id: Option<u64>,
-    mode_id: i32,
-) -> anyhow::Result<()> {
-    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
-        anyhow::bail!("AndroidApp vm/activity pointer is null");
-    }
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        let args = [mode_id.into()];
-        match extra_window_id {
-            Some(id) => {
-                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                    return Ok(());
-                };
-                env.call_method(activity_ref.as_obj(), "restartImeForTarget", "(I)V", &args)
-                    .context("call ExtraWindowActivity.restartImeForTarget")?;
-            }
-            None => {
-                env.call_method(activity, "restartImeForTarget", "(I)V", &args)
-                    .context("call MainActivity.restartImeForTarget")?;
-            }
-        }
-        Ok(())
-    })
 }
 
 /// Input events the IME wants the gpui side to apply. Each variant
@@ -291,13 +267,13 @@ static EVENT_TX: Mutex<Option<mpsc::UnboundedSender<(u64, ImeEvent)>>> = Mutex::
 /// recreation idempotent); each call drops the previous sender.
 pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<(u64, ImeEvent)> {
     let (tx, rx) = mpsc::unbounded();
-    *EVENT_TX.lock().unwrap() = Some(tx);
+    *EVENT_TX.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
     rx
 }
 
 fn dispatch_event(window_id: u64, event: ImeEvent) {
     log::debug!("ime::dispatch_event w={window_id} {}", debug_event(&event));
-    let guard = EVENT_TX.lock().unwrap();
+    let guard = EVENT_TX.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(tx) = guard.as_ref() else {
         log::warn!("ime: event arrived before init_event_channel");
         return;
@@ -570,68 +546,26 @@ pub(crate) fn notify_text_state(window_ptr: &AndroidWindowStatePtr) {
         actual_window_start = adjusted.as_ref().map(|r| r.start).unwrap_or(window_start);
     }
 
-    if let Err(err) = call_activity_update_text_state(
-        &android_app,
-        extra_window_id,
-        &text,
-        actual_window_start as i32,
-        sel_start as i32,
-        sel_end as i32,
-        comp_start_i32,
-        comp_end_i32,
-    ) {
+    let result = crate::jni_env::with_env(&android_app, |env| {
+        let text = env.new_string(text).context("new_string for IME text")?;
+        crate::jni_env::call_window_method(
+            &android_app,
+            extra_window_id,
+            "updateImeTextState",
+            "(Ljava/lang/String;IIIII)V",
+            &[
+                (&text).into(),
+                (actual_window_start as i32).into(),
+                (sel_start as i32).into(),
+                (sel_end as i32).into(),
+                comp_start_i32.into(),
+                comp_end_i32.into(),
+            ],
+        )
+    });
+    if let Err(err) = result {
         log::warn!("ime::notify_text_state failed: {err:#}");
     }
-}
-
-fn call_activity_update_text_state(
-    android_app: &AndroidApp,
-    extra_window_id: Option<u64>,
-    text: &str,
-    window_start: i32,
-    sel_start: i32,
-    sel_end: i32,
-    comp_start: i32,
-    comp_end: i32,
-) -> anyhow::Result<()> {
-    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
-        anyhow::bail!("AndroidApp vm/activity pointer is null");
-    }
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        let text_jstring = env.new_string(text).context("new_string for IME text")?;
-        let args = [
-            (&text_jstring).into(),
-            window_start.into(),
-            sel_start.into(),
-            sel_end.into(),
-            comp_start.into(),
-            comp_end.into(),
-        ];
-        match extra_window_id {
-            Some(id) => {
-                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                    return Ok(());
-                };
-                env.call_method(
-                    activity_ref.as_obj(),
-                    "updateImeTextState",
-                    "(Ljava/lang/String;IIIII)V",
-                    &args,
-                )
-                .context("call ExtraWindowActivity.updateImeTextState")?;
-            }
-            None => {
-                env.call_method(
-                    activity,
-                    "updateImeTextState",
-                    "(Ljava/lang/String;IIIII)V",
-                    &args,
-                )
-                .context("call MainActivity.updateImeTextState")?;
-            }
-        }
-        Ok(())
-    })
 }
 
 fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
@@ -724,72 +658,21 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
     }
 }
 
-/// Hide the soft keyboard when the window's text field loses focus, or
-/// a physical keyboard connects.
-pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
-    log::info!("ime::hide_keyboard w={extra_window_id:?}");
-    if let Err(err) = call_activity_void(android_app, extra_window_id, "hideIme") {
-        log::warn!("ime::hide_keyboard failed: {err:#}");
-    }
-}
-
-/// Show or hide the soft keyboard on an explicit request, gpui's
-/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`: the Activity's
-/// `requestIme`.
+/// Shows or hides the window's soft keyboard. gpui's
+/// `request_virtual_keyboard` and `dismiss_virtual_keyboard` lead here, and a
+/// text field losing focus or a physical keyboard connecting hides it.
 pub(crate) fn request_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>, show: bool) {
     log::info!("ime::request_keyboard w={extra_window_id:?} show={show}");
-    if let Err(err) = call_activity(
+    let result = crate::jni_env::call_window_method(
         android_app,
         extra_window_id,
         "requestIme",
         "(Z)V",
-        &[JValue::Bool(show.into())],
-    ) {
+        &[show.into()],
+    );
+    if let Err(err) = result {
         log::warn!("ime::request_keyboard failed: {err:#}");
     }
-}
-
-/// Call a void-returning method on the right Activity. `None` =
-/// primary (`MainActivity` via `android_app.activity_as_ptr()`);
-/// `Some(id)` = the registered `ExtraWindowActivity` with that
-/// window id (via `multi_window::extra_activity_for`).
-fn call_activity_void(
-    android_app: &AndroidApp,
-    extra_window_id: Option<u64>,
-    method: &str,
-) -> anyhow::Result<()> {
-    call_activity(android_app, extra_window_id, method, "()V", &[])
-}
-
-fn call_activity(
-    android_app: &AndroidApp,
-    extra_window_id: Option<u64>,
-    method: &str,
-    signature: &str,
-    args: &[JValue],
-) -> anyhow::Result<()> {
-    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
-        anyhow::bail!("AndroidApp vm/activity pointer is null");
-    }
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        match extra_window_id {
-            Some(id) => {
-                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                    // Activity tore down between dispatch and call;
-                    // silently drop. The keyboard would have no
-                    // surface to attach to anyway.
-                    return Ok(());
-                };
-                env.call_method(activity_ref.as_obj(), method, signature, args)
-                    .with_context(|| format!("call ExtraWindowActivity.{method}()"))?;
-            }
-            None => {
-                env.call_method(activity, method, signature, args)
-                    .with_context(|| format!("call MainActivity.{method}()"))?;
-            }
-        }
-        Ok(())
-    })
 }
 
 // --------------------------------------------------------------------
@@ -903,7 +786,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImePerformEditorAction
     dispatch_event(window_id as u64, ImeEvent::EditorAction { action_id });
 }
 
-/// Kotlin pushes its `imeShown` state here whenever it changes
+/// `WindowIme.kt` pushes whether the keyboard is showing here whenever it changes
 /// (after showSoftInput / hideSoftInput / WindowInsetsListener edge).
 /// We mirror it into [`SOFT_KEYBOARD_VISIBLE`] so the status bar keyboard button can
 /// reflect the actual OS visibility.

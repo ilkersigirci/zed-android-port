@@ -7771,7 +7771,6 @@ dependencies = [
  "anyhow",
  "log",
  "which",
- "zd_engine_core",
  "zdroid_hooks",
 ]
 

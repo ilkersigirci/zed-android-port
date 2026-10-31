@@ -23,11 +23,10 @@ pub mod process_hygiene;
 pub mod project_import;
 pub mod runtime_links;
 pub mod runtime_service;
-mod saf;
 pub mod selinux_canary;
-pub(crate) mod splash;
 pub mod storage;
 pub mod system_properties;
+mod thermal;
 mod touch;
 pub mod updater;
 mod window;
@@ -37,7 +36,7 @@ pub use platform::AndroidPlatform;
 /// The `AndroidApp` handle `run` registered, for code that runs inside
 /// the gpui `App` without access to the one `android_main` received.
 pub fn android_app() -> anyhow::Result<&'static android_activity::AndroidApp> {
-    updater::android_app()
+    jni_env::android_app()
 }
 
 /// Push the user's `android_input.on_screen_keyboard` setting into
@@ -132,7 +131,7 @@ where
 {
     // For action handlers and the updater's tasks, which run inside the gpui
     // App with no access to the AndroidApp passed in here.
-    updater::register_android_app(android_app.clone());
+    jni_env::register_android_app(android_app.clone());
     let platform: Rc<dyn gpui::Platform> = Rc::new(AndroidPlatform::new(android_app, false));
     gpui::Application::with_platform(platform).with_assets(assets)
 }

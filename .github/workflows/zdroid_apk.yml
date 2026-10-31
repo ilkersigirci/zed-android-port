@@ -36,7 +36,8 @@ env:
   APP_DIR: crates/gpui_android/examples/zed_android
   # Keep in sync with `ndkVersion` in android/app/build.gradle.kts.
   NDK_VERSION: 27.0.12077973
-  ANDROID_PLATFORM: "26"
+  # Keep in sync with `minSdk` in android/app/build.gradle.kts.
+  ANDROID_PLATFORM: "31"
   BUILD_TOOLS_VERSION: 35.0.0
   CARGO_NDK_VERSION: 4.1.2
   GRADLE_VERSION: 8.14.6

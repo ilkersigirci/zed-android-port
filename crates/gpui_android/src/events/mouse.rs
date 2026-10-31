@@ -55,10 +55,9 @@ pub(crate) fn button_from_state(state: i32) -> Option<MouseButton> {
 /// true. Listeners like ProjectPanel's on_click bail on a "first focus"
 /// click, so files would never open / folders would never expand.
 ///
-/// For non-primary (right / middle / nav) buttons, the caller also flags
-/// the touch state machine via
-/// [`crate::events::touch::mark_non_primary_down`] so the matching Up
-/// resolves to the right button instead of the default Left.
+/// For non-primary (right / middle / nav) buttons, the caller also calls
+/// `ClickTrackState::mark_non_primary_down` so the matching Up resolves to the
+/// right button instead of the default Left.
 pub(crate) fn button_down(
     button: MouseButton,
     position: Point<Pixels>,
@@ -74,21 +73,26 @@ pub(crate) fn button_down(
     })
 }
 
-/// Build the `MouseUp` paired with a previously-emitted Down. Caller
-/// decides the button (typically driven by
-/// [`crate::events::touch::finalize_up`]).
+/// Build the `MouseUp` paired with a previously-emitted Down, with that Down's
+/// click count: gpui reads a click's count from its Up.
 pub(crate) fn button_up(
     button: MouseButton,
     position: Point<Pixels>,
     modifiers: Modifiers,
+    click_count: usize,
 ) -> PlatformInput {
     PlatformInput::MouseUp(MouseUpEvent {
         button,
         position,
         modifiers,
-        click_count: 1,
+        click_count,
     })
 }
+
+/// Mouse-wheel detents scroll one "line" each at the framework level
+/// (`AXIS_VSCROLL` is about ±1.0 per notch). Desktops move a few lines per
+/// notch; 3 keeps the wheel from feeling sluggish.
+const WHEEL_LINES_PER_NOTCH: f32 = 3.0;
 
 /// Build the `ScrollEvent` for an `ACTION_SCROLL` event (mouse
 /// wheel, mouse-equivalent trackpad scroll).
@@ -116,7 +120,10 @@ pub(crate) fn wheel_scroll(
     }
     Some(PlatformInput::Scroll(ScrollEvent {
         position,
-        delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(-hscroll, vscroll))),
+        delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(
+            -hscroll * WHEEL_LINES_PER_NOTCH,
+            vscroll * WHEEL_LINES_PER_NOTCH,
+        ))),
         modifiers,
         touch_phase: TouchPhase::Moved,
         source: ScrollSource::Pointer,
