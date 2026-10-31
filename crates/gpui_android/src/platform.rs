@@ -10,7 +10,7 @@ use std::{
 
 use android_activity::{AndroidApp, AndroidAppWaker};
 use anyhow::Result;
-use futures::channel::oneshot;
+use futures::channel::{mpsc, oneshot};
 use gpui::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds,
     ClipboardItem, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, GestureTuning, Keymap,
@@ -57,6 +57,47 @@ static IDLE_SLEEP_GUARDS: AtomicUsize = AtomicUsize::new(0);
 /// window events, or set flags, that the loop only reads on its next tick,
 /// and an idle loop otherwise sleeps until something wakes it.
 static RUN_LOOP_WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
+
+static PATH_PROMPTS: Mutex<Option<mpsc::UnboundedSender<PathPrompt>>> = Mutex::new(None);
+
+/// A path prompt Zed sent to the platform, for the app to show. Dropping
+/// `answer` cancels it.
+pub struct PathPrompt {
+    /// Whether the answer is a path to write to rather than one to open.
+    pub creating_path: bool,
+    pub suggested_name: Option<String>,
+    pub answer: oneshot::Sender<Option<Vec<PathBuf>>>,
+}
+
+/// The path prompts Zed sends to the platform. They come through a channel
+/// because they arrive while the caller holds the `App`, which showing a
+/// picker needs.
+pub fn path_prompts() -> mpsc::UnboundedReceiver<PathPrompt> {
+    let (sender, receiver) = mpsc::unbounded();
+    *PATH_PROMPTS.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
+    receiver
+}
+
+fn request_path_prompt(
+    creating_path: bool,
+    suggested_name: Option<String>,
+) -> oneshot::Receiver<Option<Vec<PathBuf>>> {
+    let (answer, paths) = oneshot::channel();
+    let prompt = PathPrompt {
+        creating_path,
+        suggested_name,
+        answer,
+    };
+    let sent = PATH_PROMPTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|prompts| prompts.unbounded_send(prompt).is_ok());
+    if !sent {
+        log::error!("no receiver for a path prompt, so it's cancelled");
+    }
+    paths
+}
 
 thread_local! {
     /// When a window last presented, if no frame has started since.
@@ -1841,33 +1882,43 @@ impl Platform for AndroidPlatform {
         Task::ready(Ok(()))
     }
 
-    /// Zed's own path prompts do this on Android, and this `Err` also sends
-    /// someone who set `use_system_path_prompts` back to them: Android's picker
-    /// is for other apps' documents, and hands back content URIs Zed can't
-    /// open by path.
+    /// Android's picker is for other apps' documents and hands back content
+    /// URIs Zed can't open by path, so the app shows Zed's own picker. That
+    /// picker takes one path of either kind, so `options` doesn't apply.
     fn prompt_for_paths(
         &self,
         _options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
-        let (tx, rx) = oneshot::channel();
-        tx.send(Err(anyhow::anyhow!(
-            "Android has no system file picker for paths"
-        )))
-        .ok();
-        rx
+        let paths = request_path_prompt(false, None);
+        let (result, receiver) = oneshot::channel();
+        self.foreground_executor()
+            .spawn(async move {
+                result.send(Ok(paths.await.ok().flatten())).ok();
+            })
+            .detach();
+        receiver
     }
 
+    /// Zed's picker starts in the project's folder, as it does for Save As, so
+    /// `directory` doesn't apply.
     fn prompt_for_new_path(
         &self,
         _directory: &Path,
-        _suggested_name: Option<&str>,
+        suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
-        let (tx, rx) = oneshot::channel();
-        tx.send(Err(anyhow::anyhow!(
-            "Android has no system file picker for paths"
-        )))
-        .ok();
-        rx
+        let paths = request_path_prompt(true, suggested_name.map(str::to_owned));
+        let (result, receiver) = oneshot::channel();
+        self.foreground_executor()
+            .spawn(async move {
+                let path = paths
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|paths| paths.into_iter().next());
+                result.send(Ok(path)).ok();
+            })
+            .detach();
+        receiver
     }
 
     fn can_select_mixed_files_and_dirs(&self) -> bool {

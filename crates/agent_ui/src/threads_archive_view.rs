@@ -1273,7 +1273,14 @@ impl ProjectPickerDelegate {
             multiple: false,
             prompt: None,
         });
+        // Android answers this prompt with Zed's own picker, which replaces this
+        // modal and would drop this picker before the answer arrives. See
+        // crates/gpui_android/docs/workarounds/path-prompts-use-zed-picker.md.
+        #[cfg(target_os = "android")]
+        let keep_alive = cx.entity();
         cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "android")]
+            let _keep_alive = keep_alive;
             let Ok(Ok(Some(paths))) = paths_receiver.await else {
                 return;
             };

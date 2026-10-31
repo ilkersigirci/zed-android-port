@@ -72,12 +72,14 @@ markdown_preview = { path = "../../../markdown_preview" }
 migrator = { path = "../../../migrator" }
 node_runtime = { path = "../../../node_runtime" }
 onboarding = { path = "../../../onboarding" }
+open_path_prompt = { path = "../../../open_path_prompt" }
 outline = { path = "../../../outline" }
 outline_panel = { path = "../../../outline_panel" }
 log = "0.4"
 parking_lot = "0.12.1"
 notifications = { path = "../../../notifications" }
 paths = { path = "../../../paths" }
+picker = { path = "../../../picker" }
 project = { path = "../../../project" }
 prompt_store = { path = "../../../prompt_store" }
 project_panel = { path = "../../../project_panel" }

@@ -31,7 +31,7 @@ mod touch;
 pub mod updater;
 mod window;
 
-pub use platform::AndroidPlatform;
+pub use platform::{AndroidPlatform, PathPrompt, path_prompts};
 
 /// The `AndroidApp` handle `run` registered, for code that runs inside
 /// the gpui `App` without access to the one `android_main` received.

@@ -34,8 +34,10 @@ use gpui_tokio::Tokio;
 use log::{error, info};
 use node_runtime::NodeRuntime;
 use onboarding::{FIRST_OPEN, show_onboarding_view};
+use open_path_prompt::OpenPathDelegate;
 use parking_lot::Mutex;
-use project::Project;
+use picker::Picker;
+use project::{DirectoryLister, Project};
 use prompt_store::PromptBuilder;
 use recent_projects::{RemoteSettings, open_remote_project};
 use release_channel::AppVersion;
@@ -706,10 +708,11 @@ fn boot(
     settings::init(cx);
     android_input::set_default_settings(cx);
     runtime_background::set_default_settings(cx);
-    // Zed's own pickers for Open and Save As, which start in the home folder
-    // and reach /sdcard by path. Android's picker is for other apps'
-    // documents: it lists Zdroid's home only as one provider among many, and
-    // Zed can only use the folders in it that it could open by path anyway.
+    // Zed's own pickers for Open and Save As, which start in the open project
+    // or the home folder and reach /sdcard by path. Android's picker is for
+    // other apps' documents: it lists Zdroid's home only as one provider among
+    // many, and Zed can only use the folders in it that it could open by path
+    // anyway. See `answer_path_prompts` for prompts that skip this setting.
     SettingsStore::update_global(cx, |store, cx| {
         store.update_default_settings(cx, |defaults| {
             defaults.workspace.use_system_path_prompts = Some(false);
@@ -1182,6 +1185,10 @@ fn boot(
         )
     };
 
+    let path_prompts = gpui_android::path_prompts();
+    cx.spawn(async move |cx| answer_path_prompts(path_prompts, cx).await)
+        .detach();
+
     // An earlier release's data: no session is restored, and the only way
     // on is clearing it.
     if previous_runtime {
@@ -1262,4 +1269,62 @@ async fn open_requested_files(
             error!("zed_android: opening {paths:?} failed: {error:#}");
         }
     }
+}
+
+/// Shows Zed's own picker for the prompts Zed's crates send straight to the
+/// platform, such as Clone Repository's destination. See
+/// `crates/gpui_android/docs/workarounds/path-prompts-use-zed-picker.md`.
+async fn answer_path_prompts(
+    mut path_prompts: futures::channel::mpsc::UnboundedReceiver<gpui_android::PathPrompt>,
+    cx: &mut AsyncApp,
+) {
+    while let Some(path_prompt) = path_prompts.next().await {
+        cx.update(|cx| show_path_prompt(path_prompt, cx));
+    }
+}
+
+fn show_path_prompt(path_prompt: gpui_android::PathPrompt, cx: &mut App) {
+    let window = cx
+        .active_window()
+        .and_then(|window| window.downcast::<MultiWorkspace>())
+        .or_else(|| {
+            cx.windows()
+                .iter()
+                .find_map(|window| window.downcast::<MultiWorkspace>())
+        });
+    let Some(window) = window else {
+        error!("zed_android: no workspace window to show a path prompt in");
+        return;
+    };
+    window
+        .update(cx, |multi_workspace, window, cx| {
+            multi_workspace.workspace().update(cx, |workspace, cx| {
+                let project = workspace.project().clone();
+                let is_local = project.read(cx).is_local();
+                // These prompts answer with paths on this device, even in a
+                // project on another machine: its Download saves here.
+                let lister = DirectoryLister::Local(project, workspace.app_state().fs.clone());
+                workspace.toggle_modal(window, cx, |window, cx| {
+                    let mut query = if is_local {
+                        lister.default_query(cx)
+                    } else {
+                        "~/".to_string()
+                    };
+                    if let Some(suggested_name) = path_prompt.suggested_name {
+                        query.push_str(&suggested_name);
+                    }
+                    let delegate = OpenPathDelegate::new(
+                        path_prompt.answer,
+                        lister,
+                        path_prompt.creating_path,
+                        cx,
+                    )
+                    .show_hidden();
+                    let picker = Picker::uniform_list(delegate, window, cx);
+                    picker.set_query(&query, window, cx);
+                    picker
+                });
+            });
+        })
+        .log_err();
 }

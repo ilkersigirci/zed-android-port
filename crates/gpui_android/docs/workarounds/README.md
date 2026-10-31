@@ -37,6 +37,7 @@ trackpad, in both tablet mode and DeX.
 | [~/storage curated symlinks](termux-storage-symlinks.md) | Active | Surface common /sdcard subdirs without making them workspace roots |
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
 | [Copy projects from shared storage](noexec-banner-move.md) | Active | When users open from /sdcard anyway, copy the project into ~/projects |
+| [Path prompts use Zed's own picker](path-prompts-use-zed-picker.md) | Active | Android's picker answers with content URIs, and Zed's features need paths |
 | [Trust grants restored from WorkspaceDb at boot](trust-restore-from-db.md) | Active | Production main.rs does this; we forgot |
 
 ## Runtime engine

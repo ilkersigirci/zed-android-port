@@ -2,6 +2,7 @@
 - Files under `/sdcard` need Android's All files access: Zdroid opens the toggle once on first launch, and **Settings → Android → Allow Access to /sdcard** opens it again. Projects under the app's own folder need nothing.
 - Uninstalling Zdroid or clearing its data deletes the home folder, with your projects, SSH keys and logins, and Android doesn't back it up. Push projects to a git remote, or copy them to `~/storage/shared`, to keep them.
 - **Open with** from the Files app edits a file where it is when it's on this device's storage and All files access is on. Other files, such as ones a cloud app serves, open as a copy in `~/received`, and saving the copy doesn't change the original.
+- Zed's path picker takes one path at a time, so the agent's **Add Images** attaches one image per pick.
 - Android stops child processes past 32 across all apps. On Android 14 and later, **Developer options → Disable child process restrictions** lifts the limit.
 - The runtime has no System V IPC, so PostgreSQL doesn't start in it.
 - With a mouse or trackpad connected, the pointer can't reach the buttons in a pop-up window's title bar: Zdroid captures the pointer for trackpad gestures. Close the Settings window with Ctrl+W, minimize it with Ctrl+M, close other Zdroid windows with Ctrl+Shift+W, or tap the buttons.

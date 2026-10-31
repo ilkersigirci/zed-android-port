@@ -64,9 +64,9 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 **Updates, data and security**
 
 - Updates work like desktop Zed's: an **Update Available** button in the title bar, hourly checks (`"auto_update": false` turns them off), download progress, and Android's install session API. An update must be signed with the release certificate.
-- Credentials are stored in the Android Keystore. Plaintext ones from older versions are moved there.
+- Credentials are stored in the Android Keystore.
 - **Open with** in the Files app opens text and source files in Zdroid, where they are.
-- **Open Folder** and **Open Files** use Zed's own path picker, which starts in your home folder and reaches `/sdcard` through `~/storage/shared`. `"use_system_path_prompts": true` brings back Android's picker, which lists the home folder as **Zdroid**.
+- **Open Folder**, **Open Files** and everything else that asks for a path, such as **Clone Repository**, use Zed's own path picker, which starts in the open project or your home folder and reaches `/sdcard` through `~/storage/shared`. Android's picker isn't used, so `"use_system_path_prompts"` has no effect.
 - Cloning into an existing folder or deleting folders from the Files app no longer loses data. Typed text isn't logged, and Android backups are off, since the home folder holds SSH keys and credentials.
 - APKs are built and signed in GitHub Actions with a provenance attestation: `gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port`.
 
@@ -116,7 +116,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/i
 
 ### First launch
 
-1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid (on Android 8 to 10 it is a permission dialog instead); turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
+1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid; turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
 2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
 3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; **Settings → Android → Allow Background Activity** asks for the exemption.
 
