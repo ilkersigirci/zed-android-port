@@ -107,7 +107,7 @@ const TWO_FINGER_TAP_MOTION_PX: f32 = 6.0;
 /// start of a tap-tap-drag rather than an unrelated second tap.
 const TAP_DRAG_WINDOW: Duration = Duration::from_millis(300);
 
-/// "Hold finger 1, drag with finger 2" drag-lock threshold. When the
+/// "Hold finger 1, drag with finger 2" threshold. When the
 /// second finger lands and the first finger has already been on the
 /// pad for at least this long, interpret the gesture as a deliberate
 /// hold-and-drag (Samsung's trackpad recognizes this as
@@ -142,21 +142,6 @@ const TAP_DRAG_POSITION_SLOP_PX: f32 = 6.0;
 /// without dragging.
 const TAP_DRAG_SLOP_PX: f32 = 2.0;
 
-/// libinput "drag lock" timeout. After a tap-tap-drag's ACTION_UP we
-/// hold the button down for this long instead of releasing
-/// immediately. Within this window a fresh ACTION_DOWN continues the
-/// drag (useful when the trackpad is too small to reach the
-/// selection's end in one swipe; user lifts, repositions, and
-/// continues). After the timeout the next event auto-ends the drag.
-/// 500ms matches libinput's documented default.
-const DRAG_LOCK_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// Tap-to-end window during drag lock: a fresh ACTION_DOWN within
-/// the lock that ends in ACTION_UP within this time, with motion
-/// under `TAP_MOTION_PX`, ends the drag (emits MouseUp). A longer
-/// hold or any meaningful motion continues the drag instead.
-const DRAG_LOCK_TAP_WINDOW: Duration = Duration::from_millis(200);
-
 /// `window_id` sentinel for the primary `MainActivity` window. Extra
 /// windows use their gpui-assigned non-zero `WindowId` so per-window
 /// state never collides with the primary.
@@ -171,7 +156,7 @@ pub(crate) const PRIMARY_WINDOW_ID: u64 = 0;
 /// the extra window's id (matching `multi_window::ExtraWindowEvent`)
 /// for spawned windows. State machines + hold-drag atomics are
 /// per-window so a gesture in window A can't pollute window B's
-/// drag-lock or cursor-follow state.
+/// drag or cursor-follow state.
 #[derive(Debug)]
 pub(crate) struct CapturedEvent {
     pub window_id: u64,
@@ -230,8 +215,8 @@ pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<CapturedEvent> {
 }
 
 /// Captured-pointer gesture state. Lives as a field on
-/// `AndroidWindowState` so each window's gesture (drag-lock timers,
-/// hold-drag cursors, tap-pending flags) is fully isolated from
+/// `AndroidWindowState` so each window's gesture (hold-drag cursors,
+/// tap-pending flags) is fully isolated from
 /// gestures in other windows. Cursor position is owned by Kotlin and
 /// threaded through every event so the on-screen cursor View and the
 /// gpui-side cursor never drift.
@@ -248,7 +233,7 @@ pub(crate) struct CapturedPointerState {
     /// When the first finger of the current gesture landed. Distinct
     /// from `primary_down` because the latter clears on small cursor
     /// motion (to prevent tap-on-up after a drag) but this stays
-    /// stable through the whole gesture so drag-lock detection can
+    /// stable through the whole gesture so hold-and-drag detection can
     /// measure how long the first finger has been on the pad before
     /// the second one landed. Cleared only on UP / CANCEL.
     first_finger_at: Option<Instant>,
@@ -304,23 +289,6 @@ pub(crate) struct CapturedPointerState {
     /// grows in real time. `None` for tap-tap-drag drags (the regular
     /// `cursor` is accurate there).
     hold_drag_cursor: Option<Point<Pixels>>,
-    /// libinput-style drag lock. Set when a tap-tap-drag ACTION_UP
-    /// fires but we want to keep `button_held` pressed for the
-    /// `DRAG_LOCK_TIMEOUT` window so a fresh swipe can continue the
-    /// drag. A new ACTION_DOWN within the window clears this and
-    /// continues; a deliberate tap (DOWN then UP with low motion
-    /// inside `DRAG_LOCK_TAP_WINDOW`) ends the drag; the timeout
-    /// auto-ends on the next event. Only set for single-finger
-    /// tap-tap-drag (not for hold-and-drag, which is intrinsically
-    /// multi-touch and ends on full lift).
-    drag_lock_pending_at: Option<Instant>,
-    /// When the most recent ACTION_DOWN landed while
-    /// `drag_lock_pending_at` was set. Used by the matching
-    /// ACTION_UP to decide tap-vs-swipe: a brief DOWN+UP under
-    /// `DRAG_LOCK_TAP_WINDOW` with low motion ends the drag;
-    /// otherwise the drag continues and we re-arm
-    /// `drag_lock_pending_at` again on UP.
-    drag_lock_resume_at: Option<Instant>,
     /// Last cursor position seen, in logical pixels. Kept so we can
     /// emit `MouseUp` / synthetic-tap events at the correct location
     /// even when the triggering event itself doesn't carry an updated
@@ -384,62 +352,24 @@ pub(crate) fn translate(
             if let Some(fling) = &mut state.fling {
                 fling.stop();
             }
-            // First finger landed. Four roles in priority order:
+            // First finger landed. Three roles in priority order:
             //
-            // 1. Drag-lock resume: if the previous tap-tap-drag's
-            //    ACTION_UP put us in drag-lock-pending and we're
-            //    still inside `DRAG_LOCK_TIMEOUT`, this DOWN
-            //    continues the drag instead of starting fresh.
-            //    Button stays held (no new MouseDown emit). The
-            //    matching ACTION_UP decides tap-vs-swipe.
-            // 2. Defensive cleanup: if previous gesture left
-            //    `drag_active` or `button_held` set without an
-            //    in-flight drag lock, this is leaked state —
-            //    emit MouseUp and clear.
-            // 3. Tap-tap-drag detection: if this DOWN follows a
+            // 1. Defensive cleanup: if the previous gesture left
+            //    `drag_active` or `button_held` set, this is leaked
+            //    state — emit MouseUp and clear.
+            // 2. Tap-tap-drag detection: if this DOWN follows a
             //    recent tap near the same position, arm
             //    `tap_drag_pending` so the next MOVE past slop
             //    commits to drag mode.
-            // 4. Single-tap detection: latch the anchor so the
+            // 3. Single-tap detection: latch the anchor so the
             //    matching UP can synthesize a click.
-            let now = Instant::now();
-            let drag_lock_active = state
-                .drag_lock_pending_at
-                .map(|t| now.duration_since(t) <= DRAG_LOCK_TIMEOUT)
-                .unwrap_or(false);
-            if drag_lock_active {
-                log::debug!(
-                    "drag_lock: RESUME elapsed_ms={}",
-                    state
-                        .drag_lock_pending_at
-                        .map(|t| now.duration_since(t).as_millis())
-                        .unwrap_or(0),
-                );
-                state.drag_lock_pending_at = None;
-                state.drag_lock_resume_at = Some(now);
-                // button_held + drag_active stay set; cursor
-                // continues from wherever it is. tap-tap-drag
-                // pending is cleared so this DOWN doesn't also
-                // trigger another tap-tap-drag commit on top.
-                state.tap_drag_pending = false;
-                state.last_tap_at = None;
-                state.primary_down = Some(now);
-                state.first_finger_at = Some(now);
-                state.last_motion_at = None;
-                state.motion_accum = 0.0;
-                state.in_multi_touch = false;
-                state.right_click_armed = false;
-                return out;
-            }
             if state.drag_active || state.button_held.is_some() {
                 log::debug!(
                     "captured_pointer: stale drag state cleared on DOWN \
-                         (drag_active={} button_held={:?} hold_drag_cursor={} \
-                         drag_lock_pending={})",
+                         (drag_active={} button_held={:?} hold_drag_cursor={})",
                     state.drag_active,
                     state.button_held,
                     state.hold_drag_cursor.is_some(),
-                    state.drag_lock_pending_at.is_some(),
                 );
                 let release_pos = state.hold_drag_cursor.take().unwrap_or(state.last_cursor);
                 if let Some(button) = state.button_held.take() {
@@ -451,8 +381,6 @@ pub(crate) fn translate(
                     }));
                 }
                 state.drag_active = false;
-                state.drag_lock_pending_at = None;
-                state.drag_lock_resume_at = None;
                 set_hold_drag_active(window_id, false);
             }
             let now = Instant::now();
@@ -677,95 +605,13 @@ pub(crate) fn translate(
             }
         }
         JAVA_ACTION_UP => {
-            // Last finger lifted. Four cases:
-            //
-            // 1. Drag-lock resume tap: a fresh ACTION_DOWN earlier
-            //    set `drag_lock_resume_at`. If this UP comes
-            //    within DRAG_LOCK_TAP_WINDOW and motion stayed
-            //    under TAP_MOTION_PX, the user did a deliberate
-            //    tap to END the drag. Emit MouseUp.
-            // 2. Drag-lock resume swipe: the user is mid-drag,
-            //    motion happened. Re-arm drag-lock-pending (keep
-            //    button held; another swipe can continue from
-            //    here).
-            // 3. button_held set, no drag-lock in flight: this is
-            //    the end of a tap-tap-drag or hold-and-drag.
-            //    For tap-tap-drag (single-finger,
-            //    hold_drag_cursor==None), enter drag-lock-pending
-            //    instead of releasing — the user can swipe
-            //    again to continue selecting. Hold-and-drag
-            //    (multi-touch with hold_drag_cursor) ends
-            //    normally.
-            // 4. Plain tap (primary_down anchor fresh, low
-            //    motion): synthesize a click.
+            // Last finger lifted, which ends a press or a drag at once,
+            // as Android's own touchpad gestures and libinput do by
+            // default. Otherwise it may finish a plain tap: fresh
+            // `primary_down` anchor and low motion synthesize a click.
             state.in_multi_touch = false;
             set_hold_drag_active(window_id, false);
-            let now = Instant::now();
-            if let Some(resume_at) = state.drag_lock_resume_at.take() {
-                let resume_elapsed = now.duration_since(resume_at);
-                let is_tap =
-                    resume_elapsed < DRAG_LOCK_TAP_WINDOW && state.motion_accum <= TAP_MOTION_PX;
-                if is_tap {
-                    // User tapped without dragging — end the
-                    // drag.
-                    if let Some(button) = state.button_held.take() {
-                        let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
-                        log::debug!(
-                            "drag_lock: ENDED by tap at ({:.0},{:.0}) tap_ms={}",
-                            f32::from(cursor.x),
-                            f32::from(cursor.y),
-                            resume_elapsed.as_millis(),
-                        );
-                        out.push(PlatformInput::MouseUp(MouseUpEvent {
-                            button,
-                            position: release_pos,
-                            modifiers,
-                            click_count: 1,
-                        }));
-                    }
-                    state.drag_active = false;
-                    state.primary_down = None;
-                    state.motion_accum = 0.0;
-                    state.first_finger_at = None;
-                    state.last_motion_at = None;
-                    state.tap_drag_pending = false;
-                    return out;
-                }
-                // Swipe (with motion) — keep drag alive and
-                // re-arm the lock so another swipe can continue.
-                log::debug!(
-                    "drag_lock: RE-ARM after swipe (motion_px={:.1})",
-                    state.motion_accum,
-                );
-                state.drag_lock_pending_at = Some(now);
-                state.motion_accum = 0.0;
-                state.primary_down = None;
-                state.first_finger_at = None;
-                state.last_motion_at = None;
-                state.tap_drag_pending = false;
-                return out;
-            }
             if let Some(button) = state.button_held.take() {
-                // Single-finger tap-tap-drag → enter drag-lock.
-                // Hold-and-drag → end normally.
-                let is_tap_tap_drag = state.drag_active && state.hold_drag_cursor.is_none();
-                if is_tap_tap_drag {
-                    log::debug!(
-                        "drag_lock: ARMED at ({:.0},{:.0})",
-                        f32::from(cursor.x),
-                        f32::from(cursor.y),
-                    );
-                    // Restore button_held; we kept it held in
-                    // anticipation of a swipe-continue.
-                    state.button_held = Some(button);
-                    state.drag_lock_pending_at = Some(now);
-                    state.primary_down = None;
-                    state.motion_accum = 0.0;
-                    state.first_finger_at = None;
-                    state.last_motion_at = None;
-                    state.tap_drag_pending = false;
-                    return out;
-                }
                 let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
                 out.push(PlatformInput::MouseUp(MouseUpEvent {
                     button,
@@ -888,8 +734,6 @@ pub(crate) fn translate(
                     click_count: state.clicks.click_count(),
                 }));
                 state.drag_active = false;
-                state.drag_lock_pending_at = None;
-                state.drag_lock_resume_at = None;
                 set_hold_drag_active(window_id, false);
             }
         }
@@ -929,8 +773,6 @@ pub(crate) fn translate(
             state.tap_drag_pending = false;
             state.drag_active = false;
             state.hold_drag_cursor = None;
-            state.drag_lock_pending_at = None;
-            state.drag_lock_resume_at = None;
             set_hold_drag_active(window_id, false);
         }
         _ => {}
@@ -1123,6 +965,24 @@ mod tests {
             [PlatformInput::MouseUp(up)] if up.position.x == px(50.)
         ));
         assert!(!state.drag_active);
+    }
+
+    #[test]
+    fn lifting_the_finger_ends_a_tap_drag_at_once() {
+        let mut state = CapturedPointerState::default();
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        pad(&mut state, JAVA_ACTION_UP, 1, 0., 10.);
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_MOVE, 1, 40., 50.).as_slice(),
+            [PlatformInput::MouseDown(_), PlatformInput::MouseMove(_)]
+        ));
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_UP, 1, 0., 50.).as_slice(),
+            [PlatformInput::MouseUp(up)] if up.position.x == px(50.)
+        ));
+        assert!(!state.drag_active);
+        assert!(pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 50.).is_empty());
     }
 
     #[test]
