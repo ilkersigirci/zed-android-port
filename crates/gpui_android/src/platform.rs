@@ -1163,7 +1163,12 @@ impl AndroidPlatform {
         let (trackpad_mode_changed, extras_row_changed, soft_keyboard_changed) = {
             let mut common = self.common.borrow_mut();
             (
-                common.last_trackpad_mode_enabled.replace(trackpad_mode) != Some(trackpad_mode),
+                // Off is every Activity's starting state.
+                common
+                    .last_trackpad_mode_enabled
+                    .replace(trackpad_mode)
+                    .unwrap_or(false)
+                    != trackpad_mode,
                 common.last_extras_row_enabled.replace(extras_row) != Some(extras_row),
                 common.last_soft_keyboard_setting.replace(soft_keyboard) != Some(soft_keyboard),
             )
@@ -1690,6 +1695,7 @@ impl Platform for AndroidPlatform {
                 {
                     request_frame_callback();
                 }
+                let has_main_window = primary.is_some();
                 // Hidden windows have no surface to present to; gpui's
                 // contract is that the platform doesn't request their frames.
                 for window_ptr in primary.into_iter().chain(extras) {
@@ -1697,7 +1703,9 @@ impl Platform for AndroidPlatform {
                         window_ptr.refresh();
                     }
                 }
-                self.remove_splash_after_first_frame();
+                if has_main_window {
+                    self.remove_splash_after_first_frame();
+                }
 
                 // Reconcile IME visibility against each window's
                 // `input_handler` presence. Edge-triggered at frame

@@ -86,7 +86,7 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
             // Wheel and trackpad scrolls. Captured events return false, to
             // reach the Activity's `onGenericMotionEvent`.
             setOnGenericMotionListener { _, event ->
-                if (window.decorView.hasPointerCapture()) {
+                if (pointer.isCaptured(event)) {
                     false
                 } else {
                     forwardTouchEvent(id, event)

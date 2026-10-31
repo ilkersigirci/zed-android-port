@@ -72,7 +72,7 @@ A device that runs debug builds carries the debug certificate, and the release-s
 - [ ] App boots cleanly. No `RustPanic` / `Fatal signal 11` in `adb logcat -d`.
 - [ ] Welcome screen reads "Welcome to Zdroid" / "Welcome back to Zdroid". Logo is the orb mark.
 - [ ] Menu bar reads "Zdroid". Settings has no Auto Update or Telemetry sections.
-- [ ] **Open Project** from the welcome screen pops the SAF picker. Pick a folder, project loads.
+- [ ] **Open Project** from the welcome screen opens Zed's path picker. Pick a folder, project loads.
 - [ ] **Clone Repository** from the welcome screen pops the URL modal. Submit a small public repo URL. Toast appears with Cancel button. Clone completes, project opens.
 - [ ] Open a folder on `/sdcard/`. Yellow Move chip appears in the title bar. Tap, confirm Copy. Toast with Cancel button shows. Cancel mid-copy: dst at `~/projects/<name>` is removed cleanly.
 - [ ] On a wiped install (`adb shell pm clear com.zdroid`; never on a device whose rootfs you want to keep), the first launch extracts the rootfs behind the splash (`adb logcat -d | grep runtime_setup` shows `rootfs installed from the bundled image`), opens the All files access toggle for Zdroid, asks to allow notifications once the first child starts, and the "Installing git, the SSH client and certificates" notification completes.

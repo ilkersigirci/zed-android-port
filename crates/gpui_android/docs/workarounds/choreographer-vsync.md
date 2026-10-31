@@ -112,5 +112,4 @@ can.
 
 ## See also
 
-- [Render-pipeline perf polish](deferred-render-pipeline-perf.md), including
-  the `frame_timing` stats, which are logged at debug level
+- [Render-pipeline perf polish](deferred-render-pipeline-perf.md)

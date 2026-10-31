@@ -28,7 +28,7 @@ You subclass it, register in the manifest with the
 and the system DocumentsUI surfaces your provider's roots in the
 sidebar.
 
-API floor is 19; we're at minSdk=26, fine.
+API floor is 19, below the app's minSdk.
 
 ## Solution
 
@@ -164,9 +164,6 @@ contents (visible: projects, storage, plus any non-hidden files). Standard SAF a
 
 ## See also
 
-- [SAF picker integration](saf-picker-integration.md) — the *client*
-  side (Zed's Open Project picker invoking DocumentsUI). This file
-  is the *provider* side.
 - Termux source we ported from:
   `termux/termux-app/app/src/main/java/com/termux/filepicker/TermuxDocumentsProvider.java`
 - [`ZedApplication` for native lib load](zedapplication-loadlibrary.md)

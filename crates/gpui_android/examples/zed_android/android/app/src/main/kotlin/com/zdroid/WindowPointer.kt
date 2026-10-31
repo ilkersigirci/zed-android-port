@@ -174,12 +174,18 @@ class WindowPointer(
         return true
     }
 
+    /// Whether a generic motion event comes from pointer capture. Stylus hover
+    /// keeps its absolute position during capture.
+    fun isCaptured(event: MotionEvent): Boolean =
+        activity.window.decorView.hasPointerCapture() && (
+            event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE) ||
+                event.isFromSource(InputDevice.SOURCE_TOUCHPAD) ||
+                event.isFromSource(InputDevice.SOURCE_MOUSE)
+            )
+
     /// Returns whether the event was a captured one, now handled.
     fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        val fromCapturedSource = event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE) ||
-            event.isFromSource(InputDevice.SOURCE_TOUCHPAD) ||
-            event.isFromSource(InputDevice.SOURCE_MOUSE)
-        if (!fromCapturedSource || !activity.window.decorView.hasPointerCapture()) return false
+        if (!isCaptured(event)) return false
         handleCapturedEvent(event)
         return true
     }

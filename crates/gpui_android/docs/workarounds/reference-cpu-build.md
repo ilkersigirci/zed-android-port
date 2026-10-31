@@ -76,7 +76,7 @@ can mid-range chips on Cortex-A78 and A55 cores.
 
 ## Verification
 
-A full local `cargo ndk -t arm64-v8a -P 26 build --release` in the CI image,
+A full local `cargo ndk -t arm64-v8a -P 31 build --release` in the CI image,
 compared with the library in the published 0.8.4 APK through
 `llvm-objdump -d --no-show-raw-insn`:
 

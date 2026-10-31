@@ -37,7 +37,10 @@ class WindowIme(
         activity.getSystemService(InputMethodManager::class.java)
     }
     private var hostView: ImeHostView? = null
-    private val reportVisibility = Runnable { NativeBridge.nativeSetSoftKeyboardVisible(visible) }
+    private val reportVisibility = Runnable {
+        // Another window may be the one with a keyboard now.
+        if (activity.hasWindowFocus()) NativeBridge.nativeSetSoftKeyboardVisible(visible)
+    }
 
     /// Rust writes this from its own thread; the keyboard reads it on the UI
     /// thread.

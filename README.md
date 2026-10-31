@@ -9,7 +9,7 @@ Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilker
 > [!IMPORTANT]
 > - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the runtime and its home folder.
 > - Zdroid 0.10 doesn't open the data of 0.9.x and earlier, which ran Bootstrap or a Kali chroot: its first launch asks to clear Zdroid's data. Copy what you want to keep from the home folder first (**Open Files** in that dialog).
-> - Release builds are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
+> - Release builds need Android 12 or later and are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
 
 Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
 

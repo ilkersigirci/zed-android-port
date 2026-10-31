@@ -362,7 +362,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
     fun readClipboardText(): String? =
         clipboard.primaryClip?.takeIf { it.itemCount > 0 }
             ?.getItemAt(0)
-            ?.coerceToText(this)
+            ?.text
             ?.toString()
 
     /// On the UI thread, in the order of the calls, because the binder call can

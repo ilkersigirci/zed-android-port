@@ -11,11 +11,9 @@ without CPU compositing.
 
 ## Landed in this pass (2026-05-13)
 
-- **Item 1 (120Hz opt-in)**: `ANativeWindow_setFrameRate(0.0, COMPATIBILITY_DEFAULT)`
-  wired via `dlsym` late-binding (so API 26-29 devices silently no-op
-  instead of crashing on missing symbol). Helper at
-  `crates/gpui_android/src/platform.rs::set_native_window_frame_rate`,
-  called from `window.rs::attach_surface` on every surface attach.
+- **Item 1 (120Hz opt-in)**: `ANativeWindow_setFrameRate(0.0, COMPATIBILITY_DEFAULT)`,
+  called from `window.rs::attach_surface` on every surface attach (with 120 Hz
+  since then; see the comment there).
   Verified on Tab S9 Ultra: `dumpsys SurfaceFlinger` reports
   `frameRate: 0.00 Hz, category: Default, selectionStrategy: Self`
   for `com.zdroid`, and `frameRateOverrides=[uid=10434 frameRateHz=120.00001]`.
@@ -35,18 +33,12 @@ without CPU compositing.
   60/30Hz when idle, where the extra image adds 16-33ms of perceived
   input latency. The override was removed again; Android uses wgpu's
   default of 2 (see the comment in `window.rs::attach_surface`).
-- **Item 4 (FrameMetrics-class instrumentation)**: New
-  `crates/gpui_android/src/frame_timing.rs` records per-frame
-  `vsync_interval` / `vsync_to_paint` / `paint_duration`, logs
-  P50/P95/P99/max every 240 frames (~2-4 seconds) at debug level;
-  turn it on with `"log": {"gpui_android": "debug"}` in settings.
-  Cheaper than the Java `Window.addOnFrameMetricsAvailableListener` JNI
-  bridge that this doc originally sketched, because our renderer bypasses the
-  View tree anyway so Java FrameMetrics wouldn't capture our actual
-  draw — Choreographer-callback-relative timing measures what we
-  actually want. Sample baseline on Tab S9 at 120Hz active state:
-  `vsync_interval p50=8.34ms p95=34ms p99=58ms`, `paint_duration
-  p50=0.05ms p99=24ms`. The tail is dominated by rare expensive
+- **Item 4 (FrameMetrics-class instrumentation)**: Frame timing comes from
+  SurfaceFlinger and simpleperf, as "Debugging on the tablet" in `FORK.md`
+  describes. Java's FrameMetrics wouldn't capture the renderer's draws, which
+  bypass the View tree. A temporary in-app recorder gave this baseline on the
+  tablet at 120Hz: `vsync_interval p50=8.34ms p95=34ms p99=58ms`,
+  `paint_duration p50=0.05ms p99=24ms`. The tail is dominated by rare expensive
   paints, not by wake-up noise.
 - **Item 3 (Spurious ALooper wakes)**: The error log was misdiagnosed.
   `android-activity 0.6.1`'s `ALooper_pollOnce` returns
@@ -57,7 +49,7 @@ without CPU compositing.
   (`SPURIOUS_VSYNC_LOG_MODULE`), before both logcat and `Zed.log`.
   Saves ~12ms/sec of CPU spent in the logcat write path and removes
   120 lines/sec of log spam. Real frame-pacing tail (p99=20ms+) comes from occasional
-  long paints, not wakes — see the frame_timing samples above.
+  long paints, not wakes.
 
 ## I/O integration started (2026-05-13)
 

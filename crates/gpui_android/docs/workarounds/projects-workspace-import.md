@@ -44,6 +44,6 @@ picker (rendered "No items / Can't use this folder" on the
 externalstorage primary view). The committed externalstorage RootUri
 form is what ships. Defaulting to `~/projects` is deferred until we
 have a path that doesn't regress external-storage browsing — see
-[saf-picker-empty-on-termux-presence.md](saf-picker-empty-on-termux-presence.md)
+Android's Files app
 for an unrelated picker regression discovered during the same
 investigation.
