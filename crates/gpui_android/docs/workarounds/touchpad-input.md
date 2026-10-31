@@ -5,7 +5,7 @@
 
 ## What Android does
 
-The Book Cover trackpad (`sec_touchpad_pogo`, `Classes: TOUCH | TOUCH_MT | TOUCHPAD`) goes through AOSP's `TouchpadInputMapper` and `GestureConverter`, which run the Gestures library. `dumpsys input` shows both, with their properties. Android draws the pointer, applies its pointer speed, rejects palms while typing, and reports this to the window under the pointer (Android 16, One UI 8, tablet mode, 2026-11-01, logged by a throwaway app):
+The Book Cover trackpad (`sec_touchpad_pogo`, `Classes: TOUCH | TOUCH_MT | TOUCHPAD`) goes through AOSP's `TouchpadInputMapper` and `GestureConverter`, which run the Gestures library. `dumpsys input` shows both, with their properties. Android draws the pointer, applies its pointer speed, runs the library's palm handling (its `Palm` and `Keyboard Palm Prevent Timeout` properties), and reports this to the window under the pointer (Android 16, One UI 8, tablet mode, 2026-11-01, logged by a throwaway app):
 
 | Gesture | Events |
 |---|---|
@@ -30,4 +30,4 @@ These are Android's, not Zdroid's: pointer speed, tap to click, and scrolling di
 
 ## Why not pointer capture
 
-Zdroid used to capture the pointer, recognize trackpad gestures itself and draw its own cursor. Capture came from a May 2026 reading that the trackpad "reports as a single-finger `SOURCE_MOUSE` pointer with no multi-finger gesture recognition". That single finger is the fake finger above, whose classification nothing read. Android's docs reserve capture for games and remote desktops; it also keeps the pointer from a window's title bar.
+Zdroid used to capture the pointer, recognize trackpad gestures itself and draw its own cursor. Capture came from a May 2026 reading that the trackpad "reports as a single-finger `SOURCE_MOUSE` pointer with no multi-finger gesture recognition". That single finger is the fake finger above, whose classification nothing read. Android's docs describe capture for apps such as games and remote desktops, and on the tablet it also kept the pointer from a window's title bar.
