@@ -67,46 +67,6 @@ fn zed_release_version() -> semver::Version {
     })
 }
 
-/// Builds before 0.4.3 kept credentials in zed_credentials_provider's
-/// plaintext development file, since the Keystore wasn't wired up. Move any
-/// such entries into the Keystore, deleting the file only once every write
-/// succeeded.
-fn migrate_development_credentials(cx: &mut App) {
-    let path = paths::config_dir().join("development_credentials");
-    let json = match std::fs::read(&path) {
-        Ok(json) => json,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => {
-            log::warn!("zed_android: can't read {}: {error}", path.display());
-            return;
-        }
-    };
-    let credentials: std::collections::HashMap<String, (String, Vec<u8>)> =
-        match serde_json::from_slice(&json) {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                log::warn!("zed_android: can't parse {}: {error}", path.display());
-                return;
-            }
-        };
-    let writes = credentials
-        .iter()
-        .map(|(url, (username, password))| cx.write_credentials(url, username, password))
-        .collect::<Vec<_>>();
-    cx.background_spawn(async move {
-        for write in writes {
-            write.await?;
-        }
-        std::fs::remove_file(&path)?;
-        info!(
-            "zed_android: moved {} credentials into the Keystore",
-            credentials.len()
-        );
-        anyhow::Ok(())
-    })
-    .detach_and_log_err(cx);
-}
-
 // The next three are copies of the functions in Zed's crates/zed/src/main.rs.
 pub(crate) async fn restore_or_create_workspace(
     app_state: Arc<AppState>,
@@ -532,47 +492,41 @@ fn android_main(app: AndroidApp) {
         runtime.kernel_data_path().to_path_buf(),
     );
 
-    // The Zed process env comes from the runtime: the host shape (the
-    // guest's HOME, PATH with the loader links first) plus the engine
-    // variables every child needs to reach the loader configured. The
-    // integrated terminal inherits it.
+    // The Zed process env comes from the runtime: the host shape (the guest's
+    // HOME, PATH with the loader links first) plus the engine variables every
+    // child needs to reach the loader configured. The integrated terminal
+    // inherits it. LD_LIBRARY_PATH stays unset: it would reach every child,
+    // including /system/bin programs.
     //
-    // SAFETY: `set_var` / `remove_var` mutate libc-shared process
-    // state. The invariant is "no other thread reads/writes libc env
-    // via getenv/setenv at this point" — JVM service threads exist by
-    // android_main but don't touch libc env. OnceLock makes activity-
-    // recreation re-entry a deterministic no-op.
-    //
-    // DELIBERATELY NOT SET: LD_LIBRARY_PATH. Setting it globally
-    // poisons every spawned subprocess (including /system/bin/
-    // app_process64 trying to load /system/lib64/libsqlite.so against
-    // our OpenSSL 3.x). ZED_RELEASE_CHANNEL is also deliberately not
-    // flipped to "nightly": channel switching namespaces Zed's app data
-    // dir and would shadow the user's existing settings. The dev-channel
-    // hard-bail in `crates/remote/src/transport/ssh.rs` is patched
-    // directly.
-    static ENV_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    let _ = ENV_INITIALIZED.get_or_init(|| {
-        let ops = runtime.env_for_zed_process();
-        unsafe {
-            for (key, op) in &ops {
-                match op {
-                    zdroid_runtime::EnvOp::Set(value) => std::env::set_var(key, value),
-                    zdroid_runtime::EnvOp::Remove => std::env::remove_var(key),
-                }
+    // SAFETY: `set_var` and `remove_var` change libc's process state. No other
+    // thread that reads the environment exists yet: gpui's start below, and
+    // the JVM's own threads don't touch libc's environment.
+    unsafe {
+        for (key, op) in &runtime.env_for_zed_process() {
+            match op {
+                zdroid_runtime::EnvOp::Set(value) => std::env::set_var(key, value),
+                zdroid_runtime::EnvOp::Remove => std::env::remove_var(key),
             }
-            // The app runs on the Dev channel, where zed_credentials_provider
-            // otherwise writes API keys and tokens to a plaintext JSON file.
-            // Use gpui's credential API instead, which gpui_android backs
-            // with the Android Keystore.
-            std::env::set_var("ZED_DEVELOPMENT_USE_KEYCHAIN", "1");
         }
-        log::info!(
-            "zed_android: PATH = {}; SHELL = {}",
-            std::env::var("PATH").unwrap_or_default(),
-            std::env::var("SHELL").unwrap_or_default(),
+        // The app runs on the Dev channel, where zed_credentials_provider
+        // otherwise writes API keys and tokens to a plaintext JSON file. Use
+        // gpui's credential API instead, which gpui_android backs with the
+        // Android Keystore.
+        std::env::set_var("ZED_DEVELOPMENT_USE_KEYCHAIN", "1");
+        // Keeps Zed's updater from polling: it can't install an APK, so
+        // `app_updater` checks this fork's releases instead. `Check` is
+        // intercepted in `boot`; this only shows if something calls
+        // `auto_update::check()` directly.
+        std::env::set_var(
+            "ZED_UPDATE_EXPLANATION",
+            "Zdroid updates itself: use Zdroid → Check for Updates.",
         );
-    });
+    }
+    log::info!(
+        "zed_android: PATH = {}; SHELL = {}",
+        std::env::var("PATH").unwrap_or_default(),
+        std::env::var("SHELL").unwrap_or_default(),
+    );
 
     // The runtime's TMPDIR may not exist yet, and temp files such as SSH's
     // askpass socket go there.
@@ -652,28 +606,16 @@ fn android_main(app: AndroidApp) {
         );
     }
 
-    // Wire askpass to the standalone helper. Must happen BEFORE any
-    // AskPassSession is created (Open Remote, git auth prompts, etc.)
-    // — the askpass crate's ASKPASS_PROGRAM OnceLock initializes on
-    // first read with current_exe() (= /system/bin/app_process64 on
-    // Android) and subsequent set_askpass_program calls are silently ignored.
+    // Before any AskPassSession exists: the askpass crate otherwise settles
+    // on current_exe(), which on Android is /system/bin/app_process64.
     let askpass_path = match gpui_android::askpass_install::ensure_installed(&app, &data_path) {
         Ok(path) => path,
         Err(err) => {
-            log::warn!(
-                "zed_android: askpass helper install failed: {err:#}; \
-                 SSH password / passphrase prompts will fall back to \
-                 current_exe() (= app_process64) and SIGABRT on Android"
-            );
-            // Construct the expected path anyway so set_askpass_program isn't
-            // skipped — if the binary materializes later (next boot
-            // after the install issue is resolved) it'll be picked up.
+            log::warn!("zed_android: askpass helper install failed: {err:#}");
             data_path.join("zed-askpass-helper")
         }
     };
     if askpass_path.is_file() {
-        // Upstream's setter debug_panics on double-set; boot runs this
-        // exactly once, before any AskPassSession exists.
         askpass::set_askpass_program(askpass_path.clone());
         log::info!(
             "zed_android: askpass program set to {}",
@@ -688,19 +630,14 @@ fn android_main(app: AndroidApp) {
         );
     }
 
-    // As in Zed's main(), which android_main stands in for. android_main runs
-    // again when the activity is recreated, and both of these are once per
-    // process.
-    static PROCESS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    PROCESS_INITIALIZED.get_or_init(|| {
-        util::increase_open_file_limit().log_err();
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(std::thread::available_parallelism().map_or(1, |n| n.get().div_ceil(2)))
-            .stack_size(10 * 1024 * 1024)
-            .thread_name(|ix| format!("RayonWorker{}", ix))
-            .build_global()
-            .log_err();
-    });
+    // As in Zed's main(), which android_main stands in for.
+    util::increase_open_file_limit().log_err();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(std::thread::available_parallelism().map_or(1, |n| n.get().div_ceil(2)))
+        .stack_size(10 * 1024 * 1024)
+        .thread_name(|ix| format!("RayonWorker{}", ix))
+        .build_global()
+        .log_err();
 
     let application = gpui_android::application(app, assets::Assets);
     // Files other apps open with Zdroid, such as "Open with" in the Files app.
@@ -723,20 +660,13 @@ fn boot(
     boot_setup: runtime_setup::BootSetup,
     open_requests: futures::channel::mpsc::UnboundedReceiver<Vec<String>>,
 ) -> Result<()> {
-    // android_main can run multiple times for one process when the activity
-    // is recreated; paths' OnceLocks survive across invocations. The second
-    // call panics with "set_custom_data_dir called after data_dir or
-    // config_dir was initialized". Guard with a static flag.
-    static PATHS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    let _ = PATHS_INITIALIZED.get_or_init(|| {
-        // Every `paths::*` function (config_dir, database_dir, logs_dir,
-        // languages_dir, extensions_dir) derives from the app files dir,
-        // which is identity-mapped into the guest so Zed and the tools it
-        // spawns agree on every path. Absolute-path spawns under it are
-        // routed through the loader by `zdroid_hooks`.
-        zdroid_hooks::register_environment_root(data_path.to_path_buf());
-        paths::set_custom_data_dir(&data_path.to_string_lossy());
-    });
+    // Every `paths::*` function (config_dir, database_dir, logs_dir,
+    // languages_dir, extensions_dir) derives from the app files dir, which is
+    // identity-mapped into the guest so Zed and the tools it spawns agree on
+    // every path. Absolute-path spawns under it are routed through the loader
+    // by `zdroid_hooks`.
+    zdroid_hooks::register_environment_root(data_path.to_path_buf());
+    paths::set_custom_data_dir(&data_path.to_string_lossy());
     info!("zed_android: paths data_dir set");
 
     // Zed's main() exits when it can't create these; here the editor can
@@ -773,7 +703,6 @@ fn boot(
 
     release_channel::init(zed_release_version(), cx);
     info!("zed_android: release_channel init");
-    migrate_development_credentials(cx);
 
     info!("zed_android: settings + theme + editor init");
     settings::init(cx);
@@ -789,12 +718,6 @@ fn boot(
         });
     });
     zlog_settings::init(cx);
-    // `gpui_tokio::init` registers the global Tokio runtime that wasmtime's
-    // async support taps into for extension epoch interruption + WASI
-    // async tasks. Production calls this at zed/src/main.rs:462. Without
-    // it, extension_host's first WASM extension load panics:
-    //   `RustPanic: no state of type gpui_tokio::GlobalTokio exists`
-    // (caught it once on Android, then added this).
     gpui_tokio::init(cx);
 
     let fs: Arc<dyn Fs> = RealFs::new(None, cx.background_executor().clone());
@@ -822,12 +745,6 @@ fn boot(
     cx.set_http_client(Arc::new(http));
     <dyn Fs>::set_global(fs.clone(), cx);
 
-    // `extension::init` creates the global ExtensionHostProxy that all
-    // extension contribution registries (theme, language, debug-adapter)
-    // hang off of. Has to run BEFORE any of those `*_extension::init`
-    // calls. Cheap — just installs a default proxy global; the real
-    // store gets created later by `extension_host::init` once fs/client
-    // /node_runtime are available.
     extension::init(cx);
     theme_settings::init(theme::LoadThemes::All(Box::new(assets::Assets)), cx);
     editor::init(cx);
@@ -852,45 +769,10 @@ fn boot(
         client.id()
     );
 
-    // Initialize auto_update so the remote_server CDN-fetch path can
-    // resolve the right binary URL via `GlobalAutoUpdate`. The
-    // remote/transport.rs flow at `auto_update.rs:516` reads this
-    // global to know which `zed-remote-server` asset to fetch from
-    // GitHub releases; without it, every Open Remote attempt hard-bails
-    // with "auto-update not initialized" before any download starts.
-    //
-    // We deliberately set `ZED_UPDATE_EXPLANATION` ahead of `init` so
-    // the polling subscription (auto_update.rs:248-262) is suppressed:
-    // Zed's updater can't install an APK, so `app_updater` checks this
-    // fork's releases instead. The explanation string only shows if
-    // something calls `auto_update::check()` directly.
-    unsafe {
-        std::env::set_var(
-            "ZED_UPDATE_EXPLANATION",
-            "Zdroid updates itself: use Zdroid → Check for Updates.",
-        );
-    }
-
-    // auto_update::Check action interception. `auto_update::init` (just
-    // below) calls cx.observe_new to register the upstream Check handler
-    // at workspace_actions[0]. Upstream's handler calls `auto_update::check`
-    // which, with ZED_UPDATE_EXPLANATION set, just shows a "Zed was
-    // installed via a package manager" prompt instead of our actual
-    // in-app updater. Bubble-phase action dispatch auto-stops after
-    // the first listener that does not call cx.propagate, so any
-    // Check handler we register later (e.g. inside the big workspace
-    // observe_new further down) never runs.
-    //
-    // Fix: register our handler BEFORE auto_update::init so it sits
-    // at workspace_actions[0] and runs first. The handler starts a
-    // manual check in `app_updater`, whose progress shows in the title
-    // bar, and intentionally does not propagate, so upstream's
-    // package-manager prompt is bypassed.
-    // Direct calls to `auto_update::check()` (e.g. from the title bar
-    // collab "Please update Zed" button) still hit the prompt; that
-    // is acceptable because those callsites bypass the action system
-    // and our interception cannot reach them without forking the
-    // function.
+    // SSH projects find the remote server to download through auto_update's
+    // global. `ZED_UPDATE_EXPLANATION`, set in `android_main`, keeps its polling
+    // off. Its `Check` handler registers first and bubble-phase dispatch stops
+    // at the first listener, so this one has to come before `auto_update::init`.
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
             |_workspace: &mut Workspace, _: &auto_update::Check, _window, cx| {
@@ -945,17 +827,8 @@ fn boot(
     let node_runtime = NodeRuntime::new(client.http_client(), None, node_options_rx);
     info!("zed_android: RealFs + NodeRuntime constructed (PATH lookup + managed download)");
 
-    // Mirror `android_input.*` settings into gpui_android's runtime
-    // atomics directly via observe_global, NOT via per-paint
-    // `window.set_*` writes from `workspace::pane`. The pane path
-    // only fires when a Pane renders — during onboarding (before a
-    // project is open) there is no Pane, so the atomics stay at
-    // their `true`/`false` defaults regardless of what the user
-    // toggles in Settings. Symptom: opening Settings during
-    // onboarding, switching `on_screen_keyboard` off, then focusing
-    // a text input still pops the soft IME because the gate atomic
-    // is stale. Observer fires once immediately + on every
-    // SettingsStore change, so the gate is always fresh.
+    // gpui_android reads these settings outside any window, including during
+    // onboarding, before a pane exists.
     let push_android_input_atomics = |cx: &gpui::App| {
         let android_input = android_input::AndroidInputSettings::get_global(cx);
         gpui_android::set_on_screen_keyboard_enabled(android_input.on_screen_keyboard);
@@ -1026,11 +899,7 @@ fn boot(
     dap_adapters::init(cx);
     runtime_setup::watch_rootfs_binaries(fs.clone(), data_path.to_path_buf(), cx);
 
-    // Mirror production zed/src/main.rs:785 — without this every language's
-    // tree-sitter captures parse but render with no syntax styling. Re-apply
-    // on theme changes so theme toggles actually recolour text. Bracket
-    // matching, indents, and outline don't depend on this and would have
-    // worked already; syntax colors and rainbow brackets do.
+    // As in Zed's main(): syntax colors follow the theme.
     app_state
         .languages
         .set_theme(theme::GlobalTheme::theme(cx).clone());
@@ -1090,19 +959,7 @@ fn boot(
     Client::set_global(client.clone(), cx);
     zed::init(cx);
     feature_flags::FeatureFlagStore::init(cx);
-    // Register the TrustedWorktrees global. git_store reads it via
-    // `try_get_global` when a repo is added; without it, `is_trusted`
-    // defaults to false, which routes every repo into the
-    // dubious-ownership UI in git_panel.rs:4862.
-    //
-    // Mirror production zed/src/main.rs:450-457 — fetch the persisted
-    // trust grants from `WorkspaceDb::fetch_trusted_worktrees()` so a
-    // user's prior "Trust" choice survives across launches and
-    // reinstalls. Previously we passed `HashMap::default()` here, which
-    // wiped the in-memory trust map every boot even though the SQLite
-    // db was preserving it correctly — every relaunch re-prompted the
-    // restricted-mode trust dialog. Fall back to empty on fetch failure
-    // (typically only happens if the db schema upgrade is mid-flight).
+    // As in Zed's main(): earlier "Trust" answers survive across launches.
     let db_trusted_paths = match workspace::WorkspaceDb::global(cx).fetch_trusted_worktrees() {
         Ok(paths) => paths,
         Err(err) => {
@@ -1228,12 +1085,6 @@ fn boot(
     // reads it with `global`, which panics when it doesn't exist yet.
     git::GitHostingProviderRegistry::default_global(cx);
     git_hosting_providers::init(cx);
-    // Production zed/src/main.rs:741. Registers the workspace observer
-    // that handles `zed_actions::Extensions::default()` — opens the
-    // browse/install/manage pane (an `ExtensionsPage` workspace item).
-    // The settings-menu chevron in the Android title bar already
-    // dispatches `zed_actions::Extensions` (see title_bar.rs); without
-    // this init the action goes nowhere.
     extensions_ui::init(cx);
     keymap_editor::init(cx);
     inspector_ui::init(app_state.clone(), cx);
@@ -1265,20 +1116,17 @@ fn boot(
     cx.observe_new(move |workspace: &mut Workspace, window, cx| {
         let Some(window) = window else { return };
 
-        // Custom always-on application menu bar. On Android there's no
-        // native menu surface and the production `title_bar` crate pulls
-        // in audio/livekit/auto_update/git_ui — too heavy for this stage.
-        // The bar dispatches the same actions production's menus do, and
-        // can be hidden via the chevron-up button or the
-        // `ToggleAppMenuBar` action (Ctrl+Alt+M).
+        // Android has no system menu bar, so the header holds the menus above
+        // the title bar: the project, the trust and connection badges, and
+        // the update button.
         let weak_workspace = cx.weak_entity();
-        let menu_bar = cx.new(|inner_cx| menu_bar::MenuBar::new(weak_workspace.clone(), inner_cx));
-        menu_bar::register(&menu_bar);
-        // Title bar sits below the menu bar with the project name,
-        // Restricted Mode trust badge, and settings chevron. The
-        // chevron's tap toggles `menu_bar.hidden`; right-click /
-        // two-finger tap opens the Settings/Keymap/Themes/Icon
-        // Themes/Extensions dropdown.
+        let menu_bar = cx.new(|cx| menu_bar::MenuBar::new(weak_workspace.clone(), cx));
+        workspace.register_action({
+            let menu_bar = menu_bar.downgrade();
+            move |_, _: &menu_bar::ToggleAppMenuBar, _, cx| {
+                menu_bar.update(cx, |bar, cx| bar.toggle(cx)).log_err();
+            }
+        });
         let title_bar = cx.new(|inner_cx| {
             title_bar::TitleBar::new(weak_workspace.clone(), menu_bar.downgrade(), inner_cx)
         });
@@ -1293,18 +1141,6 @@ fn boot(
         });
     })
     .detach();
-
-    // Check-for-Updates handler is registered per-workspace above so
-    // it has Window access for prompts. The upstream
-    // `auto_update::init` already ran above which set its own App-level
-    // handler that defers to the Zed update server (irrelevant for
-    // Android); our workspace-level handler takes precedence when the
-    // menu fires the action inside a workspace context, which is the
-    // only path users hit it from.
-
-    // Copying a project from shared storage into `~/projects` runs from the
-    // noexec banner's confirmation dialog (title_bar.rs::render_noexec_banner)
-    // when an opened worktree lives on a noexec mount.
 
     // From here to the end of boot(), as in Zed's main().
     cx.observe_global::<SettingsStore>({

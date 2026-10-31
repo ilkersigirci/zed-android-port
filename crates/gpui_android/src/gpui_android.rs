@@ -11,7 +11,6 @@ mod dispatcher;
 mod display;
 pub mod dns_bridge;
 mod events;
-mod frame_timing;
 mod ime;
 mod insets;
 mod jni_env;
@@ -131,11 +130,8 @@ pub fn application<A>(android_app: android_activity::AndroidApp, assets: A) -> g
 where
     A: gpui::AssetSource,
 {
-    // Stash a clone for the updater module so action handlers / auto-
-    // check tasks (which run inside the gpui App context with no
-    // direct access to the AndroidApp passed into this function) can
-    // get back to JNI calls. Set once per process — idempotent across
-    // Activity recreations.
+    // For action handlers and the updater's tasks, which run inside the gpui
+    // App with no access to the AndroidApp passed in here.
     updater::register_android_app(android_app.clone());
     let platform: Rc<dyn gpui::Platform> = Rc::new(AndroidPlatform::new(android_app, false));
     gpui::Application::with_platform(platform).with_assets(assets)

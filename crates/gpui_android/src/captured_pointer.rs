@@ -245,10 +245,8 @@ fn is_hold_drag_active(window_id: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// Construct a fresh sender/receiver pair. Returns the receiver for
-/// the platform to drain; the sender lives in `EVENT_TX` for the JNI
-/// thread to push into. Safe to call multiple times (Activity-
-/// recreation idempotent) — each call drops the previous sender.
+/// Sets up the event channel and returns the receiver the platform's run
+/// loop drains; the sender lives in `EVENT_TX` for the JNI thread.
 pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<CapturedEvent> {
     let (tx, rx) = mpsc::unbounded();
     *EVENT_TX.lock().unwrap() = Some(tx);

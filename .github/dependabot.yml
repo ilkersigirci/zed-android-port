@@ -3,7 +3,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    # main mirrors Dylanmurzello/zed-android-port; this fork's work lives on zdroid.
+    # This fork's work lands on zdroid; main is its contribution to Dylan's repository.
     target-branch: zdroid
     schedule:
       interval: monthly

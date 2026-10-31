@@ -147,8 +147,6 @@ static IDLE_SLEEP_GUARDS: AtomicUsize = AtomicUsize::new(0);
 static RUN_LOOP_WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
 
 thread_local! {
-    /// Set while the run loop refreshes the windows for a vsync.
-    static IN_FRAME: Cell<bool> = const { Cell::new(false) };
     /// When a window last presented, if no frame has started since.
     static LAST_PRESENT_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
@@ -170,7 +168,6 @@ pub(crate) fn wake_run_loop() {
 unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) {
     FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
     FRAME_PENDING.store(true, Ordering::Release);
-    crate::frame_timing::vsync_arrived();
 }
 
 /// Asks for a refresh on the next vsync. Called through each window's frame
@@ -178,7 +175,25 @@ unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) 
 /// an idle editor stops waking at the panel's refresh rate. gpui's web and
 /// Wayland backends drive their frame loops the same way.
 pub(crate) fn request_frame_callback() {
-    post_frame_callback(IN_FRAME.get());
+    // A vsync already arrived and the run loop refreshes before it polls
+    // again; gpui asks for another frame afterwards if it still has work.
+    if FRAME_PENDING.load(Ordering::Acquire) {
+        return;
+    }
+    if FRAME_CALLBACK_POSTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    unsafe {
+        let choreographer = AChoreographer_getInstance();
+        if choreographer.is_null() {
+            // No vsync source: refresh on the run loop's next tick instead.
+            FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
+            FRAME_PENDING.store(true, Ordering::Release);
+            wake_run_loop();
+            return;
+        }
+        AChoreographer_postFrameCallback64(choreographer, frame_callback, std::ptr::null_mut());
+    }
 }
 
 /// Called whenever a window presents. While frames that present run back
@@ -187,6 +202,10 @@ pub(crate) fn request_frame_callback() {
 /// second after input that changes something arrives at 60 events a
 /// second or more, so the panel stays at its high refresh rate, and each
 /// of those presents asks for the next frame.
+pub(crate) fn frame_presented() {
+    LAST_PRESENT_AT.set(Some(Instant::now()));
+}
+
 /// Dispatches the next step of a window's trackpad glide
 /// (`captured_pointer`), and asks for another vsync while it runs. A hidden
 /// window's glide stops.
@@ -211,33 +230,6 @@ fn advance_trackpad_glide(window_ptr: &crate::window::AndroidWindowStatePtr) {
     }
 }
 
-pub(crate) fn frame_presented() {
-    LAST_PRESENT_AT.set(Some(Instant::now()));
-}
-
-fn post_frame_callback(continues_run: bool) {
-    // A vsync already arrived and the run loop refreshes before it polls
-    // again; gpui asks for another frame afterwards if it still has work.
-    if FRAME_PENDING.load(Ordering::Acquire) {
-        return;
-    }
-    if FRAME_CALLBACK_POSTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    crate::frame_timing::frame_requested(continues_run);
-    unsafe {
-        let c = AChoreographer_getInstance();
-        if c.is_null() {
-            // No vsync source: refresh on the run loop's next tick instead.
-            FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
-            FRAME_PENDING.store(true, Ordering::Release);
-            wake_run_loop();
-            return;
-        }
-        AChoreographer_postFrameCallback64(c, frame_callback, std::ptr::null_mut());
-    }
-}
-
 /// Requests the first frame on the calling thread, which must have a Looper
 /// attached (android-activity's main thread does).
 fn install_choreographer_callback() {
@@ -256,11 +248,6 @@ fn install_choreographer_callback() {
 pub(crate) struct PlatformHandlers {
     pub(crate) open_urls: Option<Box<dyn FnMut(Vec<String>)>>,
     pub(crate) quit: Option<Box<dyn FnMut() -> bool>>,
-    pub(crate) reopen: Option<Box<dyn FnMut()>>,
-    pub(crate) app_menu_action: Option<Box<dyn FnMut(&dyn Action)>>,
-    pub(crate) will_open_app_menu: Option<Box<dyn FnMut()>>,
-    pub(crate) validate_app_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
-    pub(crate) keyboard_layout_change: Option<Box<dyn FnMut()>>,
     pub(crate) app_lifecycle: Option<Box<dyn FnMut(AppLifecyclePhase)>>,
     pub(crate) memory_warning: Option<Box<dyn FnMut()>>,
 }
@@ -623,7 +610,6 @@ pub struct AndroidPlatform {
 
 impl AndroidPlatform {
     pub fn new(android_app: AndroidApp, _headless: bool) -> Self {
-        // Replaced when the Activity is recreated, with the new AndroidApp.
         *RUN_LOOP_WAKER
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(android_app.create_waker());
@@ -1759,11 +1745,6 @@ impl Platform for AndroidPlatform {
     }
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>) {
-        // `android_main` runs again on a new thread when the Activity is
-        // recreated, and a callback posted on the previous run's Looper
-        // never fires. Clear it before `on_finish_launching` opens the
-        // window, which requests the first frame.
-        FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
         // gpui reads the gesture tuning as each window opens.
         self.android_gestures();
         crate::runtime_service::start(&self.android_app);
@@ -1878,10 +1859,8 @@ impl Platform for AndroidPlatform {
                     .take()
                     .is_some_and(|at| at.elapsed() < FRAME_RUN_GAP)
                 {
-                    post_frame_callback(true);
+                    request_frame_callback();
                 }
-                IN_FRAME.set(true);
-                crate::frame_timing::paint_started();
                 // Hidden windows have no surface to present to; gpui's
                 // contract is that the platform doesn't request their frames.
                 for window_ptr in primary.into_iter().chain(extras) {
@@ -1889,8 +1868,6 @@ impl Platform for AndroidPlatform {
                         window_ptr.refresh();
                     }
                 }
-                crate::frame_timing::paint_finished();
-                IN_FRAME.set(false);
                 // First successful paint cycle => let the SplashScreen
                 // poller dismiss its window. Idempotent atomic swap on
                 // the inside; safe to call every frame.
@@ -2089,9 +2066,7 @@ impl Platform for AndroidPlatform {
     fn on_memory_warning(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.memory_warning = Some(callback);
     }
-    fn on_reopen(&self, callback: Box<dyn FnMut()>) {
-        self.common.borrow_mut().callbacks.reopen = Some(callback);
-    }
+    fn on_reopen(&self, _callback: Box<dyn FnMut()>) {}
     fn on_system_sleep(&self, _callback: Box<dyn FnMut()>) {
         // Same as on_system_wake: no app-visible system sleep signal.
     }
@@ -2102,15 +2077,9 @@ impl Platform for AndroidPlatform {
     }
     fn set_menus(&self, _menus: Vec<Menu>, _keymap: &Keymap) {}
     fn set_dock_menu(&self, _menu: Vec<MenuItem>, _keymap: &Keymap) {}
-    fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>) {
-        self.common.borrow_mut().callbacks.app_menu_action = Some(callback);
-    }
-    fn on_will_open_app_menu(&self, callback: Box<dyn FnMut()>) {
-        self.common.borrow_mut().callbacks.will_open_app_menu = Some(callback);
-    }
-    fn on_validate_app_menu_command(&self, callback: Box<dyn FnMut(&dyn Action) -> bool>) {
-        self.common.borrow_mut().callbacks.validate_app_menu_command = Some(callback);
-    }
+    fn on_app_menu_action(&self, _callback: Box<dyn FnMut(&dyn Action)>) {}
+    fn on_will_open_app_menu(&self, _callback: Box<dyn FnMut()>) {}
+    fn on_validate_app_menu_command(&self, _callback: Box<dyn FnMut(&dyn Action) -> bool>) {}
 
     fn thermal_state(&self) -> ThermalState {
         ThermalState::Nominal
@@ -2189,9 +2158,7 @@ impl Platform for AndroidPlatform {
     fn keyboard_mapper(&self) -> Rc<dyn PlatformKeyboardMapper> {
         Rc::new(DummyKeyboardMapper)
     }
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
-        self.common.borrow_mut().callbacks.keyboard_layout_change = Some(callback);
-    }
+    fn on_keyboard_layout_change(&self, _callback: Box<dyn FnMut()>) {}
 }
 
 /// Invoke `Activity.setProgrammingExtrasRowEnabled(enabled)` on the

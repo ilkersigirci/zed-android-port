@@ -3,6 +3,8 @@
 //! upstream's names and bodies, so that a Zed sync can diff them against the
 //! new release. Where a copy differs from upstream, a comment says why.
 
+// Upstream's file itself: nothing in it needs changing for Android.
+#[path = "../../../../zed/src/zed/migrate.rs"]
 mod migrate;
 
 use agent_settings::{UserAgentsMdState, init_user_agents_md};

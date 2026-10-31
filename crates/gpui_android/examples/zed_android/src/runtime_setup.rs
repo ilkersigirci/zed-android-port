@@ -53,8 +53,11 @@ pub enum BootSetup {
     PreviousRuntime,
 }
 
-/// Extract the bundled image when no rootfs is installed. Runs before
-/// the editor shows; the splash covers the seconds it takes.
+/// Extract the bundled image when no rootfs is installed. Runs before the
+/// editor shows; the splash covers the seconds it takes. The extraction takes
+/// its own thread, because this thread has to keep answering the Activity's
+/// lifecycle commands: GameActivity holds Android's UI thread until it does,
+/// which came close to an "app not responding" prompt.
 pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
     if has_previous_runtime(runtime.data_path()) {
         log::warn!(
@@ -66,14 +69,29 @@ pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
         return BootSetup::AlreadyInstalled;
     }
     let started = Instant::now();
-    let result = gpui_android::runtime_links::bundled_rootfs_image(app).and_then(|mut image| {
-        install::install(
-            runtime,
-            &mut image,
-            &zdroid_runtime::nameservers(),
-            &zdroid_runtime::timezone(),
-            &mut LogProgressSink,
-        )
+    let result = std::thread::scope(|scope| {
+        let extraction = scope.spawn({
+            let app = app.clone();
+            move || {
+                gpui_android::runtime_links::bundled_rootfs_image(&app).and_then(|mut image| {
+                    install::install(
+                        runtime,
+                        &mut image,
+                        &zdroid_runtime::nameservers(),
+                        &zdroid_runtime::timezone(),
+                        &mut LogProgressSink,
+                    )
+                })
+            }
+        });
+        // gpui isn't listening yet. What these events leave behind, it reads
+        // when it opens its window.
+        while !extraction.is_finished() {
+            app.poll_events(Some(Duration::from_millis(50)), |_event| {});
+        }
+        extraction
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the extraction thread panicked")))
     });
     match result {
         Ok(()) => {

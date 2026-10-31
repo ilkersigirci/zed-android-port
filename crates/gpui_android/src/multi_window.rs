@@ -142,25 +142,11 @@ static EXTRA_ACTIVITY_REFS: Mutex<Option<HashMap<u64, GlobalRef>>> = Mutex::new(
 /// it can't be the source of truth.
 static REGISTERED_WINDOWS: Mutex<Option<std::collections::HashSet<u64>>> = Mutex::new(None);
 
-/// Sender side of the ongoing event channel. Replaced each time
-/// `AndroidPlatform::new` calls [`init_event_channel`]. Cloned per JNI
-/// callback for thread-safe sends.
-///
-/// We use a Mutex (not a OnceLock) because Android may recreate the
-/// hosting Activity within the same OS process — e.g. after a
-/// configuration change, an OOM-recovery kill that didn't actually
-/// free the .so, or DeX windowing-mode flips. Each Activity recreation
-/// re-enters `android_main`, which constructs a fresh AndroidPlatform
-/// and expects a fresh receiver. Panicking on the second init is the
-/// "activity-recreation-idempotency" trap our docs warn about.
+/// Sender side of the event channel, set by [`init_event_channel`].
 static EVENT_TX: Mutex<Option<mpsc::UnboundedSender<ExtraWindowEvent>>> = Mutex::new(None);
 
-/// Set up the ongoing event channel. Safe to call multiple times: each
-/// invocation creates a fresh sender/receiver pair. Any previous sender
-/// is dropped (which closes its receiver in the prior platform instance,
-/// but that platform is being torn down anyway). Returns the new
-/// receiver, which the current platform drains each iteration of its
-/// event loop.
+/// Sets up the event channel and returns the receiver the platform's run
+/// loop drains.
 pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<ExtraWindowEvent> {
     let (tx, rx) = mpsc::unbounded();
     *EVENT_TX.lock().unwrap() = Some(tx);
@@ -860,11 +846,4 @@ fn read_pointers(
         .map(|((x, y), id)| (x, y, id))
         .collect::<Vec<_>>();
     Ok((positions, tool_type_buf))
-}
-
-#[allow(dead_code)]
-fn _trait_check() {
-    fn assert_send<T: Send>() {}
-    assert_send::<NativeWindow>();
-    assert_send::<ExtraWindowEvent>();
 }

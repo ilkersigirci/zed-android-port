@@ -74,7 +74,6 @@ class ZdRuntimeService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         // Releases before 0.10 posted Keep Running in Background's
         // notification on a channel of its own.
-        manager.deleteNotificationChannel(LEGACY_BACKGROUND_MODE_CHANNEL_ID)
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -154,7 +153,6 @@ class ZdRuntimeService : Service() {
         private const val EXTRA_KEEP_AWAKE = "keep_awake"
         private const val EXTRA_BACKGROUND_MODE = "background_mode"
         private const val CHANNEL_ID = "runtime"
-        private const val LEGACY_BACKGROUND_MODE_CHANNEL_ID = "zdroid-background-mode"
         private const val NOTIFICATION_ID = 1
         private const val WAKE_LOCK_TAG = "zdroid:runtime"
         private const val TAG = "zed_android_runtime"
