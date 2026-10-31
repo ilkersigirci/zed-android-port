@@ -198,13 +198,10 @@ class WindowPointer(
         val deltas = CapturedDeltas(event, activity.displayRotation())
         if (event.actionMasked == MotionEvent.ACTION_MOVE && movesCursor(event)) {
             val (maxX, maxY) = visibleBounds()
-            // Under capture Android applies no acceleration. Skipped while a
-            // button is held, so that click-drag selection stays precise.
-            val dragging = event.buttonState != 0
-            val moveX = if (dragging) deltas.sumX else accelerateMouse(deltas.sumX)
-            val moveY = if (dragging) deltas.sumY else accelerateMouse(deltas.sumY)
-            cursorX = (cursorX + moveX).coerceIn(0f, maxX - 1f)
-            cursorY = (cursorY + moveY).coerceIn(0f, maxY - 1f)
+            // Under capture Android applies no acceleration. A held button changes
+            // nothing, as in Android's own pointer speed.
+            cursorX = (cursorX + accelerateMouse(deltas.sumX)).coerceIn(0f, maxX - 1f)
+            cursorY = (cursorY + accelerateMouse(deltas.sumY)).coerceIn(0f, maxY - 1f)
             cursorOverlay?.move(cursorX, cursorY)
         }
         NativeBridge.nativeOnCapturedPointer(

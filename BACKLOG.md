@@ -10,32 +10,6 @@ External user tried to file these and was blocked by upstream Zed's `blank_issue
 - ~~**Vim mode broken**~~ — **fixed in 29b29ddd63** (key events now route from `ExtraWindowActivity` to gpui via `nativeOnExtraKeyEvent` JNI bridge; the root cause was that any extra window's `dispatchKeyEvent` was never forwarded so `PlatformInput::KeyDown` never fired). Vim and any other editor in a non-Main window now accepts typing.
 - ~~**Settings searchbar typing broken**~~ — **fixed in 29b29ddd63** (same key-routing fix, plus a tap-to-focus wrapper on the search bar with `stop_propagation` so taps don't bubble to `SettingsWindow`'s focus tracker which was immediately blurring the bar).
 
-## Image paste into the agent panel doesn't work on Android
-
-**Repro:** copy an image to the Android clipboard (screenshot share-sheet "Copy to clipboard", or copy from Files / Gallery / a browser). Open the agent panel in Zdroid, focus the message editor, paste. Nothing happens. Text paste works fine.
-
-**Diagnosis:** not a permission or storage gap. The Android clipboard bridge at `crates/gpui_android/src/clipboard.rs` is text-only by design; the module doc calls this out explicitly (`ClipboardItem` can carry images and structured entries, but our editor only round-trips text through it). `read()` calls `getPrimaryClip()` and pulls `getText()` off item 0; any `image/*` MIME entries on the clip are silently discarded before they ever reach gpui.
-
-**Consumer:** the agent panel's message editor at `crates/agent_ui/src/message_editor.rs:278` is the only path that consumes `ClipboardEntry::Image`; `crates/agent_ui/src/mention_set.rs:931` is the same hook from the mention resolver. The editor itself doesn't accept image paste, so the wiring only matters when the agent panel is focused.
-
-**Wiring needed:**
-
-1. Extend `MainActivity.readClipboardText` to inspect `ClipDescription.getMimeType(i)` for each item. If `image/png`, `image/jpeg`, `image/webp`, or `image/gif`, treat it as image instead of falling through to `getText()`.
-2. Pull the `content://` URI from `ClipData.Item.getUri()` and open it via `ContentResolver.openInputStream(uri)`. The clipboard system auto-grants read access to the receiving app for as long as the clip is active, so no `FLAG_GRANT_READ_URI_PERMISSION` plumbing on our side.
-3. Read the full byte stream, map MIME to `gpui::ImageFormat`, return `ClipboardEntry::Image(Image::from_bytes(format, bytes))`. `gpui::Image` is just `format + bytes`, no decode required on the platform side.
-
-**Implementation constraints:**
-
-- `clipboard::read` runs on the gpui render thread with a 50ms cache, because Zed reads the clipboard often, such as to enable Paste in menus. Reading multi-megabyte screenshots there would stall frames: read images on a worker and keep the resolved `Image` in the cache so later reads don't read it again.
-- Cache invalidation: bumping the read cache TTL or attaching a clipboard-change listener (`OnPrimaryClipChangedListener` via JNI) so we know when to drop the cached image without polling MIME types every 50ms.
-- Decoding format mapping: prefer the MIME from `ClipDescription`; fall back to magic-byte sniffing if absent (rare on Android but Termux clipboard managers sometimes paste raw bytes without a description).
-
-**Adjacent (not yet needed):** write path for images. Copy-image-out is much less common in editor flows; only worth wiring once a consumer exists.
-
-**Scope estimate:** a small Kotlin method beside `MainActivity.readClipboardText` that returns the bytes and MIME type, and the cache and format mapping in `crates/gpui_android/src/clipboard.rs`.
-
-**Why deferred:** core editor flow works without it, and the agent panel feature gating depends on `supports_images` from the LLM provider anyway. Pick up once a user reports a concrete blocked workflow.
-
 ## Complete native Zed AI integration
 
 The app initializes upstream `agent_ui` and `acp_tools`, including the agent panel and context-server UI; `agent`, `acp_thread`, and `context_server` are transitive dependencies.
@@ -50,10 +24,6 @@ Still unverified on a device: streamed responses and tool calls through an OpenA
 ## Scrolling runs at about 64 fps on the 120 Hz panel
 
 Measured on 2026-10-29 on 0.9.21, scrolling a file in landscape with `adb shell input swipe`: a frame every 15.6ms on average, and 83% of the gaps between frames were longer than one refresh. `android_main` spends about 12.5ms of CPU per frame on the prime core at its maximum clock, so the CPU scheduler can't help; a performance hint session changed nothing (`crates/gpui_android/docs/workarounds/choreographer-vsync.md`). A profile with the build's symbols split each frame's main-thread time into painting glyphs (24%: `TextSystem::raster_bounds` 12.6% and `WgpuAtlas::get_or_insert_with` 8.6% of the thread's own time, two locked hash lookups per glyph per frame), the editor's layout (about 20%), sorting sprites and uploading them to the GPU (about 10%), and stack switching (7%), the only part desktop doesn't pay: stacker couldn't read the stack limit on Android. 0.9.23 fixes that (`crates/gpui_android/docs/workarounds/stacker-android-stack-limit.md`): scrolling through new lines went from a frame every 15.2ms to 14.2ms, but each frame still costs about 12.5ms of CPU. The per-glyph lookups are the largest remaining cost, and reducing them means changing gpui's glyph caching.
-
-## Platform gaps found in the 2026-10-28 audit
-
-- **`reveal_path` and `open_with_system` are empty** in `platform.rs`, so "Reveal in file manager" and "Open with system app" do nothing.
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
@@ -76,8 +46,8 @@ Seen on the tablet while testing 0.11.0, none of them caused by that release:
 - **A finger often can't press the status bar's buttons.** In fullscreen with gesture navigation on One UI, Android's mandatory gesture area is the bottom 38 px and the status bar lies inside it. Logcat shows adb's taps there, and some of the owner's finger taps, reaching One UI's `TaskbarWindow` rather than Zdroid; a trackpad still reaches the buttons. The system bars have been hidden the same way since before this release, though 0.10.1 wasn't compared. Laying gpui out above `mandatorySystemGestures` would fix it, at the cost of that strip.
 - **A new window sits 45 px too low outside DeX.** Ctrl+Shift+N asks for the whole screen and One UI's freeform mode places it at `[0,45][2960,1893]`, which hides its status bar. Dragging or maximizing it from the caption is the way out. `compute_launch_bounds` could leave room for the caption.
 - **Alt reads "option" in shortcut hints.** `PlatformStyle::platform()` in `crates/ui` treats every OS it doesn't know as Mac. Changing it needs a look at its other uses.
-- **Zdroid has no icon in Android's file picker.** `ZedDocumentsProvider` sets no `COLUMN_ICON` on its root.
 - **Vim logs `Didn't find an action named "collab_panel::ToggleFocus"`.** Harmless: Android doesn't register that action.
+- **Edit → Paste goes to the center editor while the agent's message box has focus.** Seen by tapping the title bar's menu on 0.12.0: text landed in the active tab's file, and nothing happened with an image viewer as the active tab. The keyboard and the command palette's `editor: paste` reach the message box, and plain text does the same as images, so image paste isn't the cause. Not checked: a mouse, the other Edit items, other dock panels, and whether desktop Linux, which shares this menu, does it too.
 
 Not checked on the tablet:
 
@@ -88,6 +58,9 @@ Not checked on the tablet:
 
 Considered and left as they are:
 
+- **A second mouse button during a press acts as the first.** Under capture `ACTION_BUTTON_PRESS` reads `button_from_state`, which prefers the primary button, so a right press while the left is held sends a second left mouse down, and either release ends the one held button. `MotionEvent.getActionButton` says which button changed. Fixing it also needs a set of held buttons in `CapturedPointerState`.
+- **A long press doesn't vibrate.** Android's views call `performHapticFeedback(LONG_PRESS)` when a long press does something, so a drag starting from one would too. gpui has no call for it, and the reference tablet reports no vibrator capabilities and has touch feedback off, so it couldn't be felt or checked there.
+- **Paste in the terminal with an image on the clipboard sends Ctrl+V (since 0.12.0, from Zed's code).** Zed does this so that terminal agents can read the system clipboard themselves, which they can't on Android. In a shell, it makes the next key literal. Changing it would need an Android-only edit to `terminal_view.rs`.
 - **Zed's path picker answers every path prompt.** It takes one path, doesn't filter by file or folder and doesn't show the caller's title, so the agent's Add Images attaches one image per pick and Clone Repository's picker doesn't say what it's for. A Download from a project on a Windows host also gets that host's path rules in a picker for this device's paths (read in the code, not seen). Fixing these means changing Zed's `OpenPathDelegate`. See `crates/gpui_android/docs/workarounds/path-prompts-use-zed-picker.md`.
 - **Android's "pasted from" toast.** `readClipboardText` calls `getPrimaryClip`, which on Android 12 and later can show the system's clipboard-access toast when the clip came from another app, and Zed reads the clipboard to enable Paste in menus. Reading `getPrimaryClipDescription` instead for those checks would need gpui to tell the two reads apart. Tablet check: copy text in another app, come back to Zdroid and open a menu; a toast there is this.
 - **R8 stays off** (`isMinifyEnabled`). `classes.dex` is 5.8 MB of a 108 MB APK, mostly AndroidX and Kotlin's standard library, so shrinking would save about 4 MB. Rust and GameActivity's native code reach classes by name over JNI, and a missed keep rule fails only at runtime, on whichever path it hits.
@@ -129,7 +102,7 @@ Fingers go to gpui's touch gestures since step 2 of the touch plan below, and st
 
 6. ~~**Starting a scroll or long press can click.** Touch-down sends a mouse down at once, and the gesture ends with a `click_count: 0` mouse up, which gpui still treats as a click. Starting a scroll on a project-panel file can open it, and every scroll moves the editor's caret to where the finger landed. Fix: send the mouse down only once a tap is decided, as `TrackpadTouchState` already does.~~ Fixed: gpui's recognizer sends the mouse down only once a tap is decided.
 7. ~~**A two-finger swipe right-clicks.** `touch.rs` fires the right-click as soon as a second finger lands within 800 ms and 250 px, so most two-finger swipes open the context menu. Fix: fire on lift if the fingers barely moved.~~ Fixed: `TouchFeed` fires on lift if the fingers barely moved.
-8. **Trackpad-mode hold-to-drag fires only on the next move event**, and capture's drag lock releases only on the next finger down; a perfectly still finger never promotes to hold-to-drag. Losing pointer capture isn't reported to Rust either. (The finger long press, which had the same problem, now fires from gpui's timer.)
+8. **Trackpad-mode hold-to-drag fires only on the next move event**: a perfectly still finger never promotes to hold-to-drag. Losing pointer capture isn't reported to Rust either. (The finger long press, which had the same problem, now fires from gpui's timer.)
 
 **Extra windows (Settings and other pop-ups)**
 
@@ -137,7 +110,6 @@ Fingers go to gpui's touch gestures since step 2 of the touch plan below, and st
 
 **Keyboard and IME**
 
-10. **Hardware keyboards are read with a fixed US table** (`events/keyboard.rs::build_keystroke`, layout `"us"`, `DummyKeyboardMapper`). On a Turkish layout, ğ types `[`. AltGr characters, dead keys and numpad digits don't work. Fix: `AndroidApp::device_key_character_map(device_id)` (`get` with the meta state, `get_dead_char`) in the main window, and `KeyEvent.getUnicodeChar(metaState)` from Kotlin for extra windows. Tablet check: switch the keyboard cover's layout to Turkish and type ğüşıöç.
 11. **The IME doesn't know where the caret is.** `update_ime_position` is empty and `ZdroidInputConnection` doesn't implement `requestCursorUpdates`, so floating keyboards and handwriting input can't position themselves.
 12. **InputConnection contract gaps:** `setSelection`, `setComposingRegion` and `performContextMenuAction` aren't implemented, and `newCursorPosition` is ignored.
 13. **The keyboard still hides by polling** `input_handler.is_some()`, with a `text_for_range(0..1)` probe and a selection poll, instead of reacting to gpui's `text_input_state_changed`. (Text fields now show it through `request_virtual_keyboard`; see `crates/gpui_android/docs/ahead-of-upstream.md`.)
@@ -158,8 +130,6 @@ The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parall
 4. Remove `set_drag_active`, `last_input_was_touch` and `last_platform_input_was_touch` from gpui and the finger state machine from `touch.rs`.
 
 All four steps are done (2026-10). Step 1 landed behind an `android_input.legacy_touch` setting (on kept `touch.rs`'s state machine; off sent fingers to gpui's recognizer through `touch::TouchFeed`) and folded in step 3: `TouchFeed` turns a two-finger tap into a secondary click when the fingers lift, and a two-finger drag into one touch at the fingers' centroid. Step 2 claimed touch drags for the scrollbar thumb, the editor scrollbar, the pane splitter and the dock resize handle (the dock resizes through `Workspace::drag_dock_edge`, since gpui's drag and drop doesn't follow touches), long presses for the editor (word selection, drag to extend) and the terminal (selection, then the context menu on release), and made taps carry the keyboard's modifiers. Step 4 deleted the legacy path: `touch.rs`'s finger state machine, `set_drag_active`, `last_platform_input_was_touch` with `PlatformWindow::last_input_was_touch` behind it, and the `legacy_touch` setting; the touch-widened hit areas (splitter, dock handle, a scrollbar track press grabbing the thumb) read gpui's `Window::last_input_was_touch` instead.
-
-**Finger drag and drop of tabs and project panel entries.** gpui's drag and drop (`on_drag`, `DragMoveEvent`) has no touch source, so a finger can't reorder tabs or move project panel entries; the release caveats list it. (The deleted legacy path started gpui's drag and drop from a long press, then a drag.) Native Android and iOS reorder with a long press, then a drag. Start gpui's drag from a `LongPressEvent` on Android.
 
 `Application::run_embedded` still invokes `Platform::run`; it does not replace the Android event loop. `ThreadedDispatcher` is gated to tests and benchmarks in the tracked Zed release. Neither is a production replacement for the Android dispatcher at this tag. Recheck if upstream adds a production mobile dispatcher.
 

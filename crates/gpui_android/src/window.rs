@@ -163,6 +163,9 @@ pub(crate) struct AndroidWindowState {
     /// with no underline.
     pub(crate) ime_composition_start: Option<usize>,
     pub(crate) ime_composition_text: Option<String>,
+    /// The accent a dead key on a physical keyboard is showing as a composition,
+    /// for the next key to combine with.
+    pub(crate) pending_accent: Option<char>,
     /// Per-window mirror of whether the input handler was present at
     /// the last frame-boundary IME reconcile. Compared against the
     /// current `input_handler.is_some()` to detect focus gain and
@@ -689,6 +692,7 @@ impl AndroidWindow {
             extra_window_id: None,
             ime_composition_start: None,
             ime_composition_text: None,
+            pending_accent: None,
             ime_currently_visible: false,
             last_ime_target_kind: None,
             last_pushed_selection: None,

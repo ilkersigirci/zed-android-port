@@ -351,6 +351,17 @@ fn appearance_from_config(android_app: &AndroidApp) -> WindowAppearance {
     }
 }
 
+fn call_activity_with_path(android_app: &AndroidApp, method: &str, path: &Path) {
+    let result = crate::jni_env::with_activity(android_app, |env, activity| {
+        let path = env.new_string(path.to_string_lossy())?;
+        env.call_method(activity, method, "(Ljava/lang/String;)V", &[(&path).into()])?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        log::warn!("AndroidPlatform: MainActivity.{method}({path:?}) failed: {error:#}");
+    }
+}
+
 /// Dispatch `MainActivity.openUrl(url: String)` via JNI. Backs
 /// `AndroidPlatform::open_url`; the upstream gpui trait stub was empty so
 /// `cx.open_url(...)` was a silent no-op on Android. The Kotlin side wraps
@@ -901,6 +912,7 @@ impl AndroidPlatform {
                 ExtraWindowEvent::Key {
                     window_id,
                     action,
+                    device_id,
                     keycode,
                     meta_state,
                     repeat_count,
@@ -913,7 +925,9 @@ impl AndroidPlatform {
                         continue;
                     };
                     if let Some(input) = crate::events::translate_extra_key_event(
+                        &state,
                         action,
+                        device_id,
                         keycode,
                         meta_state,
                         repeat_count,
@@ -1302,13 +1316,15 @@ impl AndroidPlatform {
         let mut touch_moves = PendingTouchMoves::default();
         loop {
             let read = iter.next(|event| match event {
-                InputEvent::KeyEvent(key) => match crate::events::translate_key_event(key) {
-                    Some(input) => {
-                        touch_moves.dispatch(&window_ptr, input);
-                        InputStatus::Handled
+                InputEvent::KeyEvent(key) => {
+                    match crate::events::translate_key_event(&window_ptr, key) {
+                        Some(input) => {
+                            touch_moves.dispatch(&window_ptr, input);
+                            InputStatus::Handled
+                        }
+                        None => InputStatus::Unhandled,
                     }
-                    None => InputStatus::Unhandled,
-                },
+                }
                 InputEvent::MotionEvent(motion) => {
                     let translated = {
                         let mut state = window_ptr.state.borrow_mut();
@@ -1932,8 +1948,12 @@ impl Platform for AndroidPlatform {
     fn can_select_mixed_files_and_dirs(&self) -> bool {
         false
     }
-    fn reveal_path(&self, _path: &Path) {}
-    fn open_with_system(&self, _path: &Path) {}
+    fn reveal_path(&self, path: &Path) {
+        call_activity_with_path(&self.android_app, "revealInFiles", path);
+    }
+    fn open_with_system(&self, path: &Path) {
+        call_activity_with_path(&self.android_app, "openWithSystem", path);
+    }
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.common.borrow_mut().callbacks.quit = Some(callback);

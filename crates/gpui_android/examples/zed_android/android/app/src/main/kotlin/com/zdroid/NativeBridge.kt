@@ -110,12 +110,14 @@ object NativeBridge {
     /// has focus but typing is a no-op.
     ///
     /// `action`: `KeyEvent.ACTION_DOWN` / `ACTION_UP`.
+    /// `deviceId`: `KeyEvent.getDeviceId()`, which selects the keyboard's layout.
     /// `keyCode`: AKEYCODE_*.
     /// `metaState`: META_* bitfield (shift/ctrl/alt/meta/caps lock state).
     /// `repeatCount`: 0 for the initial press, >0 for auto-repeat.
     external fun nativeOnExtraKeyEvent(
         windowId: Long,
         action: Int,
+        deviceId: Int,
         keyCode: Int,
         metaState: Int,
         repeatCount: Int,
