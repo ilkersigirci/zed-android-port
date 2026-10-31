@@ -3012,6 +3012,22 @@ impl Interactivity {
                     .get_or_insert_with(Default::default)
                     .clone();
 
+                // On Android a long press starts a drag; see
+                // `Window::dispatch_long_press_drag`. In the capture phase, so
+                // that it comes before a tooltip's long press on the same element.
+                #[cfg(any(test, target_os = "android"))]
+                if drag_listener.is_some() {
+                    let hitbox = hitbox.clone();
+                    window.on_mouse_event(move |event: &LongPressEvent, phase, window, _cx| {
+                        if phase == DispatchPhase::Capture
+                            && event.phase == TouchPhase::Started
+                            && hitbox.is_hovered(window)
+                        {
+                            window.begin_long_press_drag();
+                        }
+                    });
+                }
+
                 window.on_mouse_event({
                     let pending_mouse_down = pending_mouse_down.clone();
                     let hitbox = hitbox.clone();

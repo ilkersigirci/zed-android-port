@@ -105,6 +105,7 @@ pub(crate) enum ExtraWindowEvent {
     Key {
         window_id: u64,
         action: i32,
+        device_id: i32,
         keycode: u32,
         meta_state: u32,
         repeat_count: i32,
@@ -598,6 +599,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraKeyEvent<'local
     _bridge: JObject<'local>,
     window_id: i64,
     action: i32,
+    device_id: i32,
     keycode: i32,
     meta_state: i32,
     repeat_count: i32,
@@ -610,6 +612,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraKeyEvent<'local
     dispatch_event(ExtraWindowEvent::Key {
         window_id,
         action,
+        device_id,
         keycode: keycode as u32,
         meta_state: meta_state as u32,
         repeat_count,

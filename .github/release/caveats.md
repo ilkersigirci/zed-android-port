@@ -9,7 +9,7 @@
 - Language servers, terminals and SSH sessions keep running in the background while they exist. For work without them, such as Zed's own agent, turn on **Zdroid → Keep Running in Background**. On Samsung devices, also set **Settings → Apps → Zdroid → Battery** to **Unrestricted**, or use **Settings → Android → Allow Background Activity**.
 - A separate Bluetooth or USB trackpad (not the Samsung Book Cover) may move rotated in landscape. Mice are unaffected.
 - A keyboard with a built-in touchpad that Android reports as one device isn't recognized as a keyboard: the keyboard button stays in the status bar, and tapping text can show the on-screen keyboard.
-- A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
+- **Reveal in File Manager** opens the folder in Android's Files app without selecting the file, since Android has no way to do that. **Reveal in File Manager** and **Open in Default App** work for your home folder and shared storage.
 - On One UI with gesture navigation, the status bar's buttons are hard to press with a finger, because Android's gesture area covers them. Use a mouse or trackpad, or the command palette.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints). Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
 - In the terminal, run Codex as `codex --no-daemon`: its background server sandboxes itself with bubblewrap, which Android doesn't allow in an app.

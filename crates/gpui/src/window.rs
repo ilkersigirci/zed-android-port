@@ -1291,6 +1291,8 @@ pub struct Window {
     touch_prediction_enabled: bool,
     long_press_timer: Option<Task<()>>,
     long_press_capture: Option<EntityId>,
+    #[cfg(any(test, target_os = "android"))]
+    long_press_drag: bool,
     pub(crate) refreshing: bool,
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) focus: Option<FocusId>,
@@ -2196,6 +2198,8 @@ impl Window {
             touch_prediction_enabled: true,
             long_press_timer: None,
             long_press_capture: None,
+            #[cfg(any(test, target_os = "android"))]
+            long_press_drag: false,
             refreshing: false,
             activation_observers: SubscriberSet::new(),
             focus: None,
@@ -3398,6 +3402,14 @@ impl Window {
     /// Returns the hitbox that has captured the pointer, if any.
     pub fn captured_hitbox(&self) -> Option<HitboxId> {
         self.captured_hitbox
+    }
+
+    /// Claims the long press that's starting for an element gpui's drag and
+    /// drop can move. See [`Self::dispatch_long_press_drag`].
+    #[cfg(any(test, target_os = "android"))]
+    pub(crate) fn begin_long_press_drag(&mut self) {
+        self.long_press_drag = true;
+        self.prevent_default();
     }
 
     /// Captures the current long press for the given entity.
@@ -5937,6 +5949,11 @@ impl Window {
                 };
                 cx.propagate_event = true;
                 self.default_prevented = false;
+                #[cfg(any(test, target_os = "android"))]
+                if self.long_press_drag {
+                    self.dispatch_long_press_drag(&long_press, cx);
+                    return;
+                }
                 let started = long_press.phase == crate::TouchPhase::Started;
                 let ended = matches!(
                     long_press.phase,
@@ -5949,10 +5966,78 @@ impl Window {
                     if !claimed {
                         self.long_press_capture = None;
                     }
+                    #[cfg(any(test, target_os = "android"))]
+                    if self.long_press_drag {
+                        self.dispatch_long_press_drag(&long_press, cx);
+                    }
                 }
                 if ended {
                     self.long_press_capture = None;
                 }
+            }
+        }
+    }
+
+    /// Gpui's drag and drop follows a held mouse button, which a finger doesn't
+    /// have. On Android a long press on an element that can be dragged stands
+    /// in for it, the way native Android lists reorder, so tabs and project
+    /// panel entries move by finger with the same drag and drop code. Lifting
+    /// the finger without moving is a click, as for other long presses. Remove
+    /// once gpui starts drags from touches itself, as
+    /// `crates/gpui_android/docs/ahead-of-upstream.md` tracks.
+    #[cfg(any(test, target_os = "android"))]
+    fn dispatch_long_press_drag(&mut self, long_press: &crate::LongPressEvent, cx: &mut App) {
+        cx.propagate_event = true;
+        self.default_prevented = false;
+        let button = MouseButton::Left;
+        let modifiers = self.modifiers;
+        match long_press.phase {
+            crate::TouchPhase::Started => self.dispatch_mouse_event(
+                &crate::MouseDownEvent {
+                    button,
+                    position: long_press.start_position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                cx,
+            ),
+            crate::TouchPhase::Moved => self.dispatch_mouse_event(
+                &MouseMoveEvent {
+                    position: long_press.position,
+                    pressed_button: Some(button),
+                    modifiers,
+                },
+                cx,
+            ),
+            crate::TouchPhase::Ended => {
+                self.long_press_drag = false;
+                self.dispatch_mouse_event(
+                    &MouseUpEvent {
+                        button,
+                        position: long_press.position,
+                        modifiers,
+                        click_count: 1,
+                    },
+                    cx,
+                );
+            }
+            // Android took the touch back, so nothing drops or clicks: a mouse
+            // up away from every element ends what the mouse down started.
+            crate::TouchPhase::Cancelled => {
+                self.long_press_drag = false;
+                cx.active_drag = None;
+                self.mouse_position = point(px(-1.), px(-1.));
+                self.dispatch_mouse_event(
+                    &MouseUpEvent {
+                        button,
+                        position: self.mouse_position,
+                        modifiers,
+                        click_count: 1,
+                    },
+                    cx,
+                );
+                self.refresh();
             }
         }
     }
@@ -9706,6 +9791,111 @@ mod tests {
                 }
             }
         });
+    }
+
+    struct DraggedByLongPress;
+
+    struct LongPressDragView {
+        clicks: Rc<Cell<usize>>,
+        drops: Rc<Cell<usize>>,
+    }
+
+    impl Render for LongPressDragView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            let drops = self.drops.clone();
+            div()
+                .size_full()
+                .flex()
+                .child(
+                    div()
+                        .id("source")
+                        .w(px(100.))
+                        .h(px(100.))
+                        .tooltip(|_, cx| cx.new(|_| crate::Empty).into())
+                        .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+                        .on_drag(DraggedByLongPress, |_, _, _, cx| cx.new(|_| crate::Empty)),
+                )
+                .child(
+                    div()
+                        .id("target")
+                        .w(px(100.))
+                        .h(px(100.))
+                        .on_drop(move |_: &DraggedByLongPress, _, _| drops.set(drops.get() + 1)),
+                )
+        }
+    }
+
+    fn long_press_drag_window(
+        cx: &mut TestAppContext,
+    ) -> (
+        crate::WindowHandle<LongPressDragView>,
+        Rc<Cell<usize>>,
+        Rc<Cell<usize>>,
+    ) {
+        let clicks = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        let window = cx.add_window({
+            let clicks = clicks.clone();
+            let drops = drops.clone();
+            move |_, _| LongPressDragView { clicks, drops }
+        });
+        cx.run_until_parked();
+        (window, clicks, drops)
+    }
+
+    fn hold_long_press(cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_millis(501));
+        cx.executor().run_until_parked();
+    }
+
+    #[gpui::test]
+    fn long_press_then_moving_drags_and_drops(cx: &mut TestAppContext) {
+        let (window, clicks, drops) = long_press_drag_window(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 50.);
+        hold_long_press(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Moved, 60.);
+        cx.update(|cx| assert!(cx.has_active_drag()));
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Moved, 150.);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Ended, 150.);
+        cx.update(|cx| assert!(!cx.has_active_drag()));
+        assert_eq!(drops.get(), 1);
+        assert_eq!(clicks.get(), 0);
+    }
+
+    #[gpui::test]
+    fn long_press_without_moving_ends_as_a_click(cx: &mut TestAppContext) {
+        let (window, clicks, drops) = long_press_drag_window(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 50.);
+        hold_long_press(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Ended, 50.);
+        cx.update(|cx| assert!(!cx.has_active_drag()));
+        assert_eq!(clicks.get(), 1);
+        assert_eq!(drops.get(), 0);
+    }
+
+    #[gpui::test]
+    fn cancelled_long_press_drag_neither_drops_nor_clicks(cx: &mut TestAppContext) {
+        let (window, clicks, drops) = long_press_drag_window(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 50.);
+        hold_long_press(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Moved, 150.);
+        cx.update(|cx| assert!(cx.has_active_drag()));
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Cancelled, 150.);
+        cx.update(|cx| assert!(!cx.has_active_drag()));
+        assert_eq!(drops.get(), 0);
+        assert_eq!(clicks.get(), 0);
+    }
+
+    #[gpui::test]
+    fn long_press_on_an_element_that_cant_be_dragged_starts_no_drag(cx: &mut TestAppContext) {
+        let (window, _, _) = long_press_drag_window(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 150.);
+        hold_long_press(cx);
+        window
+            .update(cx, |_, window, _| assert!(!window.long_press_drag))
+            .unwrap();
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Ended, 150.);
     }
 
     #[derive(Clone, Copy, PartialEq)]

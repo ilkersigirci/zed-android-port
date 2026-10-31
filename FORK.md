@@ -230,6 +230,7 @@ The examples set `device=<tablet-ip>:<port>` first.
 
 - **Logs:** `adb -s "$device" logcat | grep -E 'zed_android|zdroid|ZedDocsProvider'`. Rust logs use the `zed_android` tag at info level and above; the Kotlin side uses `zed_android_*` and `zdroid_*` tags. Crashes, including native ones such as `SIGILL`, are in `adb -s "$device" logcat -b crash -d`.
 - **Install a pull request's APK:** `adb -s "$device" install -r Zdroid-X.Y.Z-<commit>.apk`. The `versionCode` rule under [Testing a pull request](#testing-a-pull-request) still applies.
+- **Tests of `gpui_android`:** the crate only builds for Android, so its tests run on the tablet. In the build container, run `cargo ndk -t arm64-v8a -P 31 test -p gpui_android --no-run --locked` with `CARGO_TARGET_DIR` set to the app's `target`, then `adb push` the newest `target/aarch64-linux-android/debug/deps/gpui_android-*` binary to `/data/local/tmp`, run it there and delete it. CI doesn't run them. `failed_import_removes_only_its_own_destination` fails in its setup there: Android doesn't let adb's shell bind the Unix socket it creates.
 - **Screenshot:** `adb -s "$device" exec-out screencap -p > screen.png`. It captures whatever is on the tablet's screen, so ask its owner first.
 - **Wake-ups and CPU per thread:** run this with Zdroid open and the tablet untouched. The editor's main loop is the `android_main` thread.
 

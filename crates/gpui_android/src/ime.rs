@@ -92,6 +92,10 @@ pub(crate) fn invert_scroll_enabled() -> bool {
     INVERT_SCROLL.load(Ordering::Acquire)
 }
 
+/// `KeyCharacterMap.VIRTUAL_KEYBOARD`, the map for keys the on-screen keyboard
+/// sends: they come from no physical keyboard with a layout of its own.
+const VIRTUAL_KEYBOARD: i32 = -1;
+
 /// IME window ids (0 for the main window) whose focused text field accepts
 /// typed text, as gpui reports through `text_input_state_changed`. A focused
 /// field that doesn't, such as an editor in vim's normal or visual mode,
@@ -578,9 +582,13 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             meta_state,
             repeat_count,
         } => {
-            if let Some(input) =
-                crate::events::translate_extra_key_event(action, keycode, meta_state, repeat_count)
-            {
+            if let Some(input) = crate::events::translate_extra_key_event(
+                action,
+                VIRTUAL_KEYBOARD,
+                keycode,
+                meta_state,
+                repeat_count,
+            ) {
                 window_ptr.handle_input(input);
             }
             // KeyEvent may have moved the cursor (arrows) or changed
@@ -605,9 +613,13 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             const ACTION_UP: i32 = 1;
             const KEYCODE_ENTER: u32 = 66;
             for key_action in [ACTION_DOWN, ACTION_UP] {
-                if let Some(input) =
-                    crate::events::translate_extra_key_event(key_action, KEYCODE_ENTER, 0, 0)
-                {
+                if let Some(input) = crate::events::translate_extra_key_event(
+                    key_action,
+                    VIRTUAL_KEYBOARD,
+                    KEYCODE_ENTER,
+                    0,
+                    0,
+                ) {
                     window_ptr.handle_input(input);
                 }
             }

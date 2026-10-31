@@ -174,6 +174,7 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
             NativeBridge.nativeOnExtraKeyEvent(
                 windowId,
                 event.action,
+                event.deviceId,
                 event.keyCode,
                 event.metaState,
                 event.repeatCount,

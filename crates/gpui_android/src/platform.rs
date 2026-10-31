@@ -356,6 +356,17 @@ fn appearance_from_config(android_app: &AndroidApp) -> WindowAppearance {
 /// `cx.open_url(...)` was a silent no-op on Android. The Kotlin side wraps
 /// `startActivity(Intent.ACTION_VIEW, Uri.parse(url))` and swallows
 /// ActivityNotFoundException.
+fn call_activity_with_path(android_app: &AndroidApp, method: &str, path: &Path) {
+    let result = crate::jni_env::with_activity(android_app, |env, activity| {
+        let path = env.new_string(path.to_string_lossy())?;
+        env.call_method(activity, method, "(Ljava/lang/String;)V", &[(&path).into()])?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        log::warn!("AndroidPlatform: MainActivity.{method}({path:?}) failed: {error:#}");
+    }
+}
+
 fn jni_open_url(android_app: &AndroidApp, url: &str) -> Result<()> {
     use anyhow::Context;
 
@@ -901,6 +912,7 @@ impl AndroidPlatform {
                 ExtraWindowEvent::Key {
                     window_id,
                     action,
+                    device_id,
                     keycode,
                     meta_state,
                     repeat_count,
@@ -914,6 +926,7 @@ impl AndroidPlatform {
                     };
                     if let Some(input) = crate::events::translate_extra_key_event(
                         action,
+                        device_id,
                         keycode,
                         meta_state,
                         repeat_count,
@@ -1932,8 +1945,12 @@ impl Platform for AndroidPlatform {
     fn can_select_mixed_files_and_dirs(&self) -> bool {
         false
     }
-    fn reveal_path(&self, _path: &Path) {}
-    fn open_with_system(&self, _path: &Path) {}
+    fn reveal_path(&self, path: &Path) {
+        call_activity_with_path(&self.android_app, "revealInFiles", path);
+    }
+    fn open_with_system(&self, path: &Path) {
+        call_activity_with_path(&self.android_app, "openWithSystem", path);
+    }
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.common.borrow_mut().callbacks.quit = Some(callback);
