@@ -220,11 +220,9 @@ pub(crate) fn translate_motion_event(
 /// the mouse path below. The tool types only tell palms apart.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn translate_extra_motion_event(
-    window_id: u64,
     action_masked: i32,
     action_index: i32,
     meta_state: i32,
-    button_state: i32,
     flags: i32,
     vscroll: f32,
     hscroll: f32,
@@ -253,14 +251,10 @@ pub(crate) fn translate_extra_motion_event(
     if is_touch_action {
         return crate::touch::dispatch_extra(
             state,
-            window_id,
             action_masked,
             action_index,
             meta_state,
-            button_state,
             flags,
-            vscroll,
-            hscroll,
             positions,
             tool_types,
             scale_factor,

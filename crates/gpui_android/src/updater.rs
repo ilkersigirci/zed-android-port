@@ -269,7 +269,7 @@ pub fn download_apk(
         // a 404 followed by a 200 doesn't leave a truncated file from
         // the 404 attempt under the same dest path.
         if dest.exists() {
-            let _ = std::fs::remove_file(&dest);
+            std::fs::remove_file(&dest).ok();
         }
         log::info!("updater: downloading {url} -> {}", dest.display());
         let resp = match agent.get(url).set("User-Agent", USER_AGENT).call() {

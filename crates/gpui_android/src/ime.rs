@@ -360,46 +360,29 @@ pub(crate) fn drain_ime_events(
 /// shown in the composition overlay but NOT sent to the PTY. Only
 /// `commit_composition` sends to the PTY.
 fn set_composition(window_ptr: &AndroidWindowStatePtr, new_text: &str) {
-    let mut state = window_ptr.state.borrow_mut();
-    if state.input_handler.is_none() {
-        log::debug!("ime: set_composition dropped (no input handler)");
-        return;
-    }
     let new_len = new_text.encode_utf16().count();
-
-    // Snapshot composition anchor & current selection BEFORE the
-    // mutating handler call so we can record where the new marked
-    // span lives (for our local tracking + later commit/unmark).
-    // `marked_text_range()` would be the authoritative source but
-    // terminals don't implement it, so we fall back to the cursor
-    // position when no prior composition exists.
-    let prev_start = state.ime_composition_start;
-    let start = match prev_start {
-        Some(start) => start,
-        None => {
-            let handler = state.input_handler.as_mut().expect("checked is_some above");
+    let previous_start = window_ptr.state.borrow().ime_composition_start;
+    let start = window_ptr.with_input_handler(|handler| {
+        // `marked_text_range()` would be the authoritative source of where a
+        // composition starts, but terminals don't implement it.
+        let start = previous_start.unwrap_or_else(|| {
             handler
                 .selected_text_range(false)
-                .map(|s| s.range.start)
-                .unwrap_or(0)
-        }
+                .map_or(0, |selection| selection.range.start)
+        });
+        // `None` means "replace the entire active marked region" for the
+        // editor, and "set the composition overlay" for the terminal. The
+        // editor's `replace_and_mark_text_in_range` reads a `Some(range)` as
+        // relative to the marked range, as NSTextInputClient does, so absolute
+        // offsets would land far past the cursor.
+        handler.replace_and_mark_text_in_range(None, new_text, Some(new_len..new_len));
+        start
+    });
+    let Some(start) = start else {
+        log::debug!("ime: set_composition dropped (no input handler)");
+        return;
     };
-
-    // Pass `range_utf16 = None`. Editor's
-    // `replace_and_mark_text_in_range` interprets a Some(range) as
-    // RELATIVE to the existing marked range (macOS NSTextInputClient
-    // convention: setMarkedText's replacement_range is offset within
-    // marked region). Passing absolute coords here adds those
-    // offsets to the marked start, blowing the insertion point far
-    // past the cursor (the +67 char editor-buffer bug). None means
-    // "replace the entire active marked region with new_text" for
-    // editor, and "set composition overlay to new_text" for terminal.
-    let selected_range = Some(new_len..new_len);
-    {
-        let handler = state.input_handler.as_mut().expect("checked is_some above");
-        handler.replace_and_mark_text_in_range(None, new_text, selected_range);
-    }
-
+    let mut state = window_ptr.state.borrow_mut();
     state.ime_composition_start = Some(start);
     state.ime_composition_text = Some(new_text.to_string());
 }
@@ -427,62 +410,39 @@ fn set_composition(window_ptr: &AndroidWindowStatePtr, new_text: &str) {
 /// terminals (whose handler stubs `text_for_range`). That signal
 /// drives whether the finalization path needs an explicit commit.
 fn commit_composition(window_ptr: &AndroidWindowStatePtr, replacement_text: Option<&str>) {
-    let mut state = window_ptr.state.borrow_mut();
-    if state.input_handler.is_none() {
-        log::debug!("ime: commit_composition dropped (no input handler)");
-        return;
-    }
-
-    let prev_start = state.ime_composition_start;
-    let prev_text = state.ime_composition_text.clone();
-    let prev_len = prev_text.as_ref().map(|s| s.encode_utf16().count());
-
-    // Distinguish editor-style (marked text lives in the buffer; we
-    // only need to drop the underline on finish) from terminal-style
-    // (marked text lives in a composition overlay only; we need an
-    // explicit commit to deliver it to the PTY). Probe by querying
-    // text over the marked range: editor returns the marked content,
-    // terminal returns None. Run this before any mutating call so
-    // the probe reflects the post-composition state.
-    let marked_is_in_buffer = match (prev_start, prev_text.as_ref(), prev_len) {
-        (Some(start), Some(text), Some(len)) => {
-            let handler = state.input_handler.as_mut().expect("checked is_some above");
-            let mut adjusted = None;
-            let slice = handler.text_for_range(start..start + len, &mut adjusted);
-            slice.as_deref() == Some(text.as_str())
-        }
-        _ => false,
+    let (previous_start, previous_text) = {
+        let state = window_ptr.state.borrow();
+        (
+            state.ime_composition_start,
+            state.ime_composition_text.clone(),
+        )
     };
-
-    match replacement_text {
-        Some(text) => {
-            // commitText. Pass `range_utf16 = None`: editor's
-            // `replace_text_in_range` will (a) use its own
-            // marked_text_ranges as the replacement target if any,
-            // and (b) call `unmark_text` itself at the end (see
-            // editor.rs:23674). Terminal's replace_text_in_range
-            // clears marked + commits to PTY in one call. Calling
-            // `unmark_text` BEFORE here is harmful for editor
-            // because it clears marked_ranges so the replace
-            // can't use them.
-            let handler = state.input_handler.as_mut().expect("checked is_some above");
-            handler.replace_text_in_range(None, text);
-        }
+    let handled = window_ptr.with_input_handler(|handler| match replacement_text {
+        // Both handlers replace the marked range, drop the mark, and in the
+        // terminal's case send to the PTY. Calling `unmark_text` first would
+        // leave the editor nothing to replace.
+        Some(text) => handler.replace_text_in_range(None, text),
         None => {
-            let handler = state.input_handler.as_mut().expect("checked is_some above");
+            let Some(text) = previous_text.as_deref() else {
+                return;
+            };
+            let marked_is_in_buffer = previous_start.is_some_and(|start| {
+                let end = start + text.encode_utf16().count();
+                let mut adjusted = None;
+                handler.text_for_range(start..end, &mut adjusted).as_deref() == Some(text)
+            });
             if marked_is_in_buffer {
-                // Editor: text already in buffer, just drop the
-                // composition highlight.
                 handler.unmark_text();
-            } else if let Some(text) = prev_text.as_deref() {
-                // Terminal: marked text lives only in the overlay.
-                // Replace_text_in_range delivers it to the PTY
-                // (terminal's impl: clear_marked_text + commit_text).
+            } else {
                 handler.replace_text_in_range(None, text);
             }
         }
+    });
+    if handled.is_none() {
+        log::debug!("ime: commit_composition dropped (no input handler)");
+        return;
     }
-
+    let mut state = window_ptr.state.borrow_mut();
     state.ime_composition_start = None;
     state.ime_composition_text = None;
 }
@@ -507,44 +467,38 @@ fn commit_composition(window_ptr: &AndroidWindowStatePtr, replacement_text: Opti
 const IME_MIRROR_WINDOW: usize = 256;
 
 pub(crate) fn notify_text_state(window_ptr: &AndroidWindowStatePtr) {
-    let android_app: AndroidApp;
-    let extra_window_id: Option<u64>;
-    let comp_start_i32: i32;
-    let comp_end_i32: i32;
-    let sel_start: usize;
-    let sel_end: usize;
-    let text: String;
-    let actual_window_start: usize;
-    {
-        let mut state = window_ptr.state.borrow_mut();
-        android_app = state.android_app.clone();
-        extra_window_id = state.extra_window_id;
-        let comp_start_opt = state.ime_composition_start;
-        let comp_text_len = state
-            .ime_composition_text
-            .as_ref()
-            .map(|s| s.encode_utf16().count());
-        comp_start_i32 = comp_start_opt.map(|s| s as i32).unwrap_or(-1);
-        comp_end_i32 = match (comp_start_opt, comp_text_len) {
-            (Some(s), Some(len)) => (s + len) as i32,
-            _ => -1,
-        };
-        let Some(handler) = state.input_handler.as_mut() else {
-            return;
-        };
-        let Some(selection) = handler.selected_text_range(false) else {
-            return;
-        };
-        sel_start = selection.range.start;
-        sel_end = selection.range.end;
-        let window_start = sel_start.saturating_sub(IME_MIRROR_WINDOW);
-        let window_end = sel_end.saturating_add(IME_MIRROR_WINDOW);
+    let (android_app, extra_window_id, composition) = {
+        let state = window_ptr.state.borrow();
+        let composition = state.ime_composition_start.zip(
+            state
+                .ime_composition_text
+                .as_ref()
+                .map(|text| text.encode_utf16().count()),
+        );
+        (
+            state.android_app.clone(),
+            state.extra_window_id,
+            composition,
+        )
+    };
+    let (comp_start_i32, comp_end_i32) = composition.map_or((-1, -1), |(start, len)| {
+        (start as i32, (start + len) as i32)
+    });
+    let mirrored = window_ptr.with_input_handler(|handler| {
+        let selection = handler.selected_text_range(false)?;
+        let window_start = selection.range.start.saturating_sub(IME_MIRROR_WINDOW);
+        let window_end = selection.range.end.saturating_add(IME_MIRROR_WINDOW);
         let mut adjusted = None;
-        text = handler
+        let text = handler
             .text_for_range(window_start..window_end, &mut adjusted)
             .unwrap_or_default();
-        actual_window_start = adjusted.as_ref().map(|r| r.start).unwrap_or(window_start);
-    }
+        let actual_window_start = adjusted.map_or(window_start, |range| range.start);
+        Some((selection.range, text, actual_window_start))
+    });
+    let Some(Some((selection, text, actual_window_start))) = mirrored else {
+        return;
+    };
+    let (sel_start, sel_end) = (selection.start, selection.end);
 
     let result = crate::jni_env::with_env(&android_app, |env| {
         let text = env.new_string(text).context("new_string for IME text")?;
@@ -595,19 +549,27 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             before_length,
             after_length,
         } => {
-            let mut state = window_ptr.state.borrow_mut();
-            let Some(handler) = state.input_handler.as_mut() else {
+            let deleted = window_ptr.with_input_handler(|handler| {
+                let Some(selection) = handler.selected_text_range(false) else {
+                    return false;
+                };
+                let before = (before_length.max(0) as usize).min(selection.range.start);
+                let after = after_length.max(0) as usize;
+                // The selection stays: the IME names what's around it. The
+                // later range goes first, so the earlier one's offsets hold.
+                if after > 0 {
+                    let end = selection.range.end;
+                    handler.replace_text_in_range(Some(end..end + after), "");
+                }
+                if before > 0 {
+                    let start = selection.range.start;
+                    handler.replace_text_in_range(Some(start - before..start), "");
+                }
+                true
+            });
+            if deleted != Some(true) {
                 return;
-            };
-            let Some(selection) = handler.selected_text_range(false) else {
-                return;
-            };
-            let cursor = selection.range.start;
-            let before = (before_length.max(0) as usize).min(cursor);
-            let after = after_length.max(0) as usize;
-            let start = cursor - before;
-            let end = selection.range.end + after;
-            handler.replace_text_in_range(Some(start..end), "");
+            }
             true
         }
         ImeEvent::KeyEvent {

@@ -45,7 +45,7 @@ actions!(
         /// background language servers and terminals are not stopped.
         AllowBackgroundActivity,
         /// Open the system toggle that lets Zdroid read and write files
-        /// under /sdcard (All files access on Android 11 and later).
+        /// under /sdcard (All files access).
         AllowAllFilesAccess,
     ]
 );

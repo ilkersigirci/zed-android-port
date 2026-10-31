@@ -96,7 +96,6 @@ pub(crate) enum ExtraWindowEvent {
         action_masked: i32,
         action_index: i32,
         meta_state: i32,
-        button_state: i32,
         /// `MotionEvent.getFlags()`.
         flags: i32,
         vscroll: f32,
@@ -561,7 +560,6 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     action_masked: i32,
     action_index: i32,
     meta_state: i32,
-    button_state: i32,
     flags: i32,
     vscroll: f32,
     hscroll: f32,
@@ -587,7 +585,6 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
         action_masked,
         action_index,
         meta_state,
-        button_state,
         flags,
         vscroll,
         hscroll,

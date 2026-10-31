@@ -542,8 +542,7 @@ fn android_main(app: AndroidApp) {
     gpui_android::pointer_authentication::check_pointer_authentication();
 
     // Shared storage access for raw /sdcard paths: the All files access
-    // toggle on Android 11+, the runtime permission dialog before. Asked
-    // once per install; Settings → Android opens it again.
+    // toggle, asked once per install. Settings → Android opens it again.
     gpui_android::storage::request_once(&app);
 
     // The engine's loader ships in the APK's native library dir (extracted
@@ -683,10 +682,9 @@ fn boot(
         &data_path.join("etc"),
         &data_path.join("bin"),
         &home,
-        // Default landing dir for the project picker. Lives on app-private
-        // storage where execve and dlopen work natively, so cargo / go /
-        // make / native-npm / native-pip all just run. SAF-picked projects
-        // get imported here; nothing executable ever runs from /sdcard.
+        // Default landing dir for the project picker, on app-private storage,
+        // where programs can run. Nothing executable runs from /sdcard, so
+        // projects opened there get copied here.
         &projects_dir,
     ] {
         if let Err(err) = std::fs::create_dir_all(path) {

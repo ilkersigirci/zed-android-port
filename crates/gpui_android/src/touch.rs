@@ -94,14 +94,10 @@ pub(crate) fn dispatch_primary(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_extra(
     state: &mut AndroidWindowState,
-    _window_id: u64,
     action_masked: i32,
     action_index: i32,
     meta_state: i32,
-    _button_state: i32,
     flags: i32,
-    _vscroll: f32,
-    _hscroll: f32,
     positions: &[(f32, f32, i32)],
     tool_types: &[i32],
     scale_factor: f32,

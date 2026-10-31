@@ -132,7 +132,7 @@ internal class CursorSurfaceControl(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             transaction.setPosition(sc, x - hotX, y - hotY)
         } else {
-            // Android 10–12 expose this mapping through setGeometry;
+            // Android 12 exposes this mapping through setGeometry;
             // setPosition became public in Android 13.
             val left = (x - hotX).toInt()
             val top = (y - hotY).toInt()

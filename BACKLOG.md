@@ -122,13 +122,11 @@ Fingers go to gpui's touch gestures since step 2 of the touch plan below, and st
 
 10. **Hardware keyboards are read with a fixed US table** (`events/keyboard.rs::build_keystroke`, layout `"us"`, `DummyKeyboardMapper`). On a Turkish layout, ğ types `[`. AltGr characters, dead keys and numpad digits don't work. Fix: `AndroidApp::device_key_character_map(device_id)` (`get` with the meta state, `get_dead_char`) in the main window, and `KeyEvent.getUnicodeChar(metaState)` from Kotlin for extra windows. Tablet check: switch the keyboard cover's layout to Turkish and type ğüşıöç.
 11. **The IME doesn't know where the caret is.** `update_ime_position` is empty and `ZdroidInputConnection` doesn't implement `requestCursorUpdates`, so floating keyboards and handwriting input can't position themselves.
-12. **InputConnection contract gaps:** `setSelection`, `setComposingRegion` and `performContextMenuAction` aren't implemented, `deleteSurroundingText` also deletes the selection, and `newCursorPosition` is ignored.
+12. **InputConnection contract gaps:** `setSelection`, `setComposingRegion` and `performContextMenuAction` aren't implemented, and `newCursorPosition` is ignored.
 13. **The keyboard still hides by polling** `input_handler.is_some()`, with a `text_for_range(0..1)` probe and a selection poll, instead of reacting to gpui's `text_input_state_changed`. (Text fields now show it through `request_virtual_keyboard`; see `crates/gpui_android/docs/ahead-of-upstream.md`.)
-14. **IME callbacks call into the editor while holding a mutable borrow of the window state** (`ime.rs`, `platform.rs`). Nothing triggers it today, but a re-entrant call would panic.
-
 **Code health**
 
-15. Unchecked indexing in `touch.rs`; `expect()` in `ime.rs`; stale comments across `events/*.rs`, `touch.rs` and `ime.rs`; dead `Finger` arms in `events/source.rs` and unused arguments in `touch.rs`.
+15. Unchecked indexing in `touch.rs`; stale comments across `events/*.rs`, `touch.rs` and `ime.rs`; dead `Finger` arms in `events/source.rs`.
 16. Per-event work on the trackpad path: two relative-coordinate arrays per captured event, and a JNI call plus `runOnUiThread` per trackpad-mode move.
 
 ## Post-2026-08 upstream-merge follow-ups

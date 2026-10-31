@@ -53,6 +53,9 @@ import java.security.MessageDigest
 /// [ExtraWindowActivity], which OS-managed freeform windowing gives its own
 /// chrome. See `multi_window.rs`.
 class MainActivity : GameActivity(), ZdroidWindow {
+    /// The animated splash, until the first frame.
+    private var splashOverlay: FrameLayout? = null
+
     /// The programming extras row (Esc, Tab, Ctrl, Alt, arrows). Created the
     /// first time it shows, and gone while the setting is off.
     private var extraKeysView: ExtraKeysView? = null
@@ -199,10 +202,9 @@ class MainActivity : GameActivity(), ZdroidWindow {
         refreshPhysicalKeyboard()
     }
 
-    /// The animated splash, a view above the SurfaceView until the first
-    /// frame, so a cold start shows one animation instead of icon, black,
-    /// editor. A separate splash Activity couldn't do this: gpui and its surface
-    /// only start while this Activity is visible.
+    /// A view above the SurfaceView, so a cold start shows one animation instead
+    /// of icon, black, editor. A separate splash Activity couldn't do this: gpui
+    /// and its surface only start while this Activity is visible.
     private fun installSplashOverlay() {
         val container = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -247,8 +249,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
             }
             .start()
     }
-
-    private var splashOverlay: FrameLayout? = null
 
     override fun onTrackballEvent(event: MotionEvent): Boolean =
         pointer.onTrackballEvent(event) || super.onTrackballEvent(event)

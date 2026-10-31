@@ -824,7 +824,6 @@ impl AndroidPlatform {
                     action_masked,
                     action_index,
                     meta_state,
-                    button_state,
                     flags,
                     vscroll,
                     hscroll,
@@ -842,11 +841,9 @@ impl AndroidPlatform {
                         let mut window_state = state.state.borrow_mut();
                         let scale = window_state.scale_factor;
                         crate::events::translate_extra_motion_event(
-                            window_id,
                             action_masked,
                             action_index,
                             meta_state,
-                            button_state,
                             flags,
                             vscroll,
                             hscroll,
@@ -1065,49 +1062,39 @@ impl AndroidPlatform {
         window_ptr: &crate::window::AndroidWindowStatePtr,
         android_app: &android_activity::AndroidApp,
     ) {
-        let current_kind: Option<crate::ime::ImeTargetKind>;
-        let current_selection: Option<(usize, usize)>;
-        let composition_anchor: Option<(usize, usize)>;
-        let our_composition_active: bool;
-        let handler_has_stale_mark: bool;
-        let last_kind: Option<crate::ime::ImeTargetKind>;
-        let last_selection: Option<(usize, usize)>;
-        {
-            let mut state = window_ptr.state.borrow_mut();
-            last_kind = state.last_ime_target_kind;
-            last_selection = state.last_pushed_selection;
-            // Snapshot composition tracking before mut-borrowing
-            // input_handler — once `handler` is alive, we can't
-            // touch other fields of `state` immutably.
-            our_composition_active = state.ime_composition_text.is_some();
-            composition_anchor = state.ime_composition_start.and_then(|start| {
-                state
-                    .ime_composition_text
-                    .as_ref()
-                    .map(|t| (start, start + t.encode_utf16().count()))
-            });
-            let Some(handler) = state.input_handler.as_mut() else {
-                return;
-            };
-            current_kind = Some(crate::ime::probe_target_kind(handler));
-            current_selection = handler
-                .selected_text_range(false)
-                .map(|s| (s.range.start, s.range.end));
-            // If the editor still has a marked range from a prior
-            // composition session (user typed in editor, switched
-            // away without committing, came back), the editor's
-            // marked_text_ranges will still be set. Our next
-            // setComposingText with range_utf16=None would then
-            // accidentally replace those stale marks (editor.rs:
-            // 23690 — "use marked_ranges if present"). Detect and
-            // clean up while we have the handler at hand.
-            handler_has_stale_mark =
-                !our_composition_active && handler.marked_text_range().is_some();
-            if handler_has_stale_mark {
-                handler.unmark_text();
-            }
-        }
-        if handler_has_stale_mark {
+        let (last_kind, last_selection, our_composition_active, composition_anchor) = {
+            let state = window_ptr.state.borrow();
+            (
+                state.last_ime_target_kind,
+                state.last_pushed_selection,
+                state.ime_composition_text.is_some(),
+                state.ime_composition_start.and_then(|start| {
+                    state
+                        .ime_composition_text
+                        .as_ref()
+                        .map(|text| (start, start + text.encode_utf16().count()))
+                }),
+            )
+        };
+        let Some((current_kind, current_selection, cleared_stale_mark)) = window_ptr
+            .with_input_handler(|handler| {
+                let kind = crate::ime::probe_target_kind(handler);
+                let selection = handler
+                    .selected_text_range(false)
+                    .map(|selection| (selection.range.start, selection.range.end));
+                // A marked range left from an earlier composition session
+                // (typed in the editor, switched away without committing, came
+                // back) would be replaced by the next setComposingText.
+                let stale_mark = !our_composition_active && handler.marked_text_range().is_some();
+                if stale_mark {
+                    handler.unmark_text();
+                }
+                (Some(kind), selection, stale_mark)
+            })
+        else {
+            return;
+        };
+        if cleared_stale_mark {
             log::info!("ime::tick cleared stale editor marked range");
         }
 

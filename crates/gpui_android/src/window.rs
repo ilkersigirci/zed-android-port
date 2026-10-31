@@ -557,18 +557,26 @@ impl AndroidWindowStatePtr {
         if let PlatformInput::KeyDown(event) = input {
             // Only allow shift as the modifier when inserting text — anything
             // else (ctrl-c, alt-anything) is presumed to be a binding.
-            if event.keystroke.modifiers.is_subset_of(&Modifiers::shift()) {
-                let mut state = self.state.borrow_mut();
-                if let Some(mut input_handler) = state.input_handler.take() {
-                    if let Some(key_char) = &event.keystroke.key_char {
-                        drop(state);
-                        input_handler.replace_text_in_range(None, key_char);
-                        state = self.state.borrow_mut();
-                    }
-                    state.input_handler = Some(input_handler);
-                }
+            if event.keystroke.modifiers.is_subset_of(&Modifiers::shift())
+                && let Some(key_char) = &event.keystroke.key_char
+            {
+                self.with_input_handler(|handler| handler.replace_text_in_range(None, key_char));
             }
         }
+    }
+
+    /// Runs `f` with the window's input handler, if it has one, with the
+    /// window's state free. The handler's calls update gpui, whose effects
+    /// reach back into this window: setting its title, say, as an edit makes
+    /// the buffer dirty.
+    pub(crate) fn with_input_handler<T>(
+        &self,
+        f: impl FnOnce(&mut PlatformInputHandler) -> T,
+    ) -> Option<T> {
+        let mut handler = self.state.borrow_mut().input_handler.take()?;
+        let result = f(&mut handler);
+        self.state.borrow_mut().input_handler = Some(handler);
+        Some(result)
     }
 
     /// Mirrors `Window::dispatch_event`'s bookkeeping.

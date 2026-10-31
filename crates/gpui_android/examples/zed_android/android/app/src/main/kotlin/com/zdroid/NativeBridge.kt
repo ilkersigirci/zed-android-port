@@ -86,7 +86,6 @@ object NativeBridge {
         actionMasked: Int,
         actionIndex: Int,
         metaState: Int,
-        buttonState: Int,
         flags: Int,
         vscroll: Float,
         hscroll: Float,

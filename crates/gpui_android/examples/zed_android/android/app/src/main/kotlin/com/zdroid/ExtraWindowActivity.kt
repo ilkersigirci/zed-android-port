@@ -238,7 +238,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
             event.actionMasked,
             event.actionIndex,
             event.metaState,
-            event.buttonState,
             event.flags,
             vscroll,
             hscroll,
