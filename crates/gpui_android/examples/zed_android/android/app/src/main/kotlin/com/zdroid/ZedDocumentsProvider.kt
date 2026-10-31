@@ -216,6 +216,27 @@ class ZedDocumentsProvider : DocumentsProvider() {
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
         File(documentId).normalize().startsWith(File(parentDocumentId).normalize())
 
+    // The Files app opens a document by asking for its path from the root, and
+    // shows its default folder instead when a provider has no answer.
+    override fun findDocumentPath(
+        parentDocumentId: String?,
+        childDocumentId: String,
+    ): DocumentsContract.Path {
+        val top = parentDocumentId?.let(::getFileForDocId) ?: baseDir
+        val child = getFileForDocId(childDocumentId)
+        if (!child.startsWith(top)) {
+            throw FileNotFoundException("$childDocumentId is outside $top")
+        }
+        val path = generateSequence(child) { it.parentFile }
+            .takeWhile { it.startsWith(top) }
+            .map { it.path }
+            .toList()
+            .asReversed()
+        // Android asks for a root only when no parent is given.
+        val root = if (parentDocumentId == null) baseDir.absolutePath else null
+        return DocumentsContract.Path(root, path)
+    }
+
     override fun getDocumentType(documentId: String): String =
         getMime(getFileForDocId(documentId))
 

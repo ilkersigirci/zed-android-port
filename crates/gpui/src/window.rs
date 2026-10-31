@@ -6021,6 +6021,10 @@ impl Window {
                     },
                     cx,
                 );
+                // A lifted finger hovers nothing, and no mouse move would come to
+                // hide the tooltip of the element the drag rested on.
+                self.mouse_position = point(px(-1.), px(-1.));
+                self.refresh();
             }
             // Android took the touch back, so nothing drops or clicks: a mouse
             // up away from every element ends what the mouse down started.
@@ -9821,6 +9825,7 @@ mod tests {
                         .id("target")
                         .w(px(100.))
                         .h(px(100.))
+                        .tooltip(|_, cx| cx.new(|_| crate::Empty).into())
                         .on_drop(move |_: &DraggedByLongPress, _, _| drops.set(drops.get() + 1)),
                 )
         }
@@ -9861,6 +9866,24 @@ mod tests {
         cx.update(|cx| assert!(!cx.has_active_drag()));
         assert_eq!(drops.get(), 1);
         assert_eq!(clicks.get(), 0);
+    }
+
+    #[gpui::test]
+    fn long_press_drop_leaves_no_tooltip_behind(cx: &mut TestAppContext) {
+        let (window, _, drops) = long_press_drag_window(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 50.);
+        hold_long_press(cx);
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Moved, 150.);
+        // Resting on the target opens its tooltip, which stays hidden until the
+        // drag ends.
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.executor().run_until_parked();
+        dispatch_touch(window, cx, TouchId(1), TouchPhase::Ended, 150.);
+        cx.executor().run_until_parked();
+        assert_eq!(drops.get(), 1);
+        window
+            .update(cx, |_, window, _| assert!(window.tooltip_bounds.is_none()))
+            .unwrap();
     }
 
     #[gpui::test]

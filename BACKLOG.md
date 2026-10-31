@@ -48,6 +48,7 @@ Seen on the tablet while testing 0.11.0, none of them caused by that release:
 - **Alt reads "option" in shortcut hints.** `PlatformStyle::platform()` in `crates/ui` treats every OS it doesn't know as Mac. Changing it needs a look at its other uses.
 - **Zdroid has no icon in Android's file picker.** `ZedDocumentsProvider` sets no `COLUMN_ICON` on its root.
 - **Vim logs `Didn't find an action named "collab_panel::ToggleFocus"`.** Harmless: Android doesn't register that action.
+- **Edit → Paste goes to the center editor while the agent's message box has focus.** Seen by tapping the title bar's menu on 0.12.0: text landed in the active tab's file, and nothing happened with an image viewer as the active tab. The keyboard and the command palette's `editor: paste` reach the message box, and plain text does the same as images, so image paste isn't the cause. Not checked: a mouse, the other Edit items, other dock panels, and whether desktop Linux, which shares this menu, does it too.
 
 Not checked on the tablet:
 

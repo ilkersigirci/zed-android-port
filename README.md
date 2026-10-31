@@ -29,7 +29,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - The Agent Panel runs ACP agents such as Claude Code and Codex, locally in the Ubuntu runtime and on SSH remotes, and Google Antigravity on SSH remotes. Keep and Reject buttons review their edits.
 - Zed's own agent and inline assistant work with your API keys: hosted providers such as Anthropic, OpenAI, Google and OpenRouter, and OpenAI-compatible endpoints ([details](#ai)).
 - The screen stays on while an agent works.
-- Images you copy in another app paste into the agent's message box.
+- Images you copy in another app paste into the agent's message box with Ctrl+V, or Ctrl+Shift+V in vim's insert mode. Vim's `p` can't paste images.
 
 **Touch, keyboard and pointer**
 
