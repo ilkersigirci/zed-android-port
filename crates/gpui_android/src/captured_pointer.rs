@@ -38,10 +38,10 @@
 //!   and treat subsequent motion as click-and-drag. ACTION_UP ends
 //!   the drag. This is how text selection / rubber-band / drag-and-
 //!   drop is invoked on every major desktop trackpad spec.
-//! - `ACTION_BUTTON_PRESS` (Samsung's driver-recognized drag): emit
-//!   `MouseDown(Left)`, follow with MouseMove(Left held), release on
-//!   `ACTION_BUTTON_RELEASE`. Coexists with tap-tap-drag for
-//!   trackpads that don't emit BUTTON_PRESS reliably in capture mode.
+//! - `ACTION_BUTTON_PRESS` (pressing a clickpad until it clicks, or a
+//!   mouse button): emit `MouseDown(Left)`, follow with MouseMove(Left
+//!   held), release on `ACTION_BUTTON_RELEASE`. Coexists with
+//!   tap-tap-drag for trackpads without a physical click.
 //!
 //! Two-finger:
 //! - Quick tap-tap (both fingers down + up within `TWO_FINGER_TAP_WINDOW`
@@ -81,12 +81,7 @@ use crate::events::{
 };
 
 /// `InputDevice.SOURCE_TOUCHPAD` = SOURCE_CLASS_POSITION (0x8) plus
-/// the touchpad bit (0x100000). Used to source-filter BUTTON_PRESS /
-/// BUTTON_RELEASE: verified empirically (logs show source=0x100008)
-/// that Samsung's keyboard-cover trackpad fires these on every finger
-/// contact, not just real clicks. For a real mouse plugged into the
-/// tablet (SOURCE_MOUSE = 0x2002), BUTTON_PRESS is a genuine click
-/// and must still be honored.
+/// the touchpad bit (0x100000).
 const ANDROID_SOURCE_TOUCHPAD: i32 = 0x00100008;
 
 /// Tap detection: a single-finger `ACTION_DOWN` → `ACTION_UP` within
@@ -524,15 +519,19 @@ pub(crate) fn translate(
                 state.drag_active = true;
                 state.hold_drag_cursor = Some(cursor);
                 state.right_click_armed = false;
-                state.button_held = Some(MouseButton::Left);
                 set_hold_drag_active(window_id, true);
-                out.push(PlatformInput::MouseDown(MouseDownEvent {
-                    button: MouseButton::Left,
-                    position: cursor,
-                    modifiers,
-                    click_count: 1,
-                    first_mouse: false,
-                }));
+                // Finger 1 may already be pressing the pad, which has sent the
+                // mouse down.
+                if state.button_held.is_none() {
+                    state.button_held = Some(MouseButton::Left);
+                    out.push(PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: cursor,
+                        modifiers,
+                        click_count: 1,
+                        first_mouse: false,
+                    }));
+                }
             } else {
                 log::debug!(
                     "hold_drag: SKIPPED hold_ms={} stationary_ms={} \
@@ -545,22 +544,10 @@ pub(crate) fn translate(
                 state.right_click_armed = event.pointer_count == 2
                     && hold_elapsed <= TWO_FINGER_TAP_WINDOW
                     && state.motion_accum <= TWO_FINGER_TAP_MOTION_PX;
-                // Verified empirically: the cover trackpad's
-                // ACTION_BUTTON_PRESS fires shortly after finger 1
-                // DOWN regardless of user intent. If it already
-                // emitted a MouseDown, the editor sees scroll-
-                // while-clicked when this scroll path proceeds —
-                // which most editors interpret as drag-select
-                // (visible to the user as "scroll triggers
-                // selection"). Release the button first so the
-                // scroll is independent of the firmware-emitted
-                // click.
+                // A press still held would make the editor see
+                // scroll-while-clicked, which it reads as drag-select.
+                // Release it so the scroll stands alone.
                 if let Some(button) = state.button_held.take() {
-                    log::debug!(
-                        "hold_drag: releasing inherited BUTTON_PRESS before scroll \
-                             (button={:?})",
-                        button,
-                    );
                     out.push(PlatformInput::MouseUp(MouseUpEvent {
                         button,
                         position: cursor,
@@ -873,19 +860,12 @@ pub(crate) fn translate(
             }
         }
         JAVA_ACTION_BUTTON_PRESS => {
-            // SOURCE_TOUCHPAD BUTTON_PRESS is firmware noise on
-            // the cover trackpad (logs verify it fires on
-            // every finger contact, regardless of click intent).
-            // Honoring it as a click breaks the gesture state
-            // machine: it sets button_held mid-gesture, blocks
-            // hold-and-drag entry, and combines with two-finger
-            // scroll to produce "scroll triggers selection" in
-            // the editor. Ignore for touchpad source; for real
-            // mouse buttons (SOURCE_MOUSE), the event represents
-            // a genuine click and must be honored.
-            if event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD {
-                // touchpad noise: drop on the floor
-            } else {
+            // Samsung's keyboard-cover trackpad reports a press only when the pad
+            // clicks, not when a finger rests on it. A press with two fingers
+            // stays the two-finger gesture, and one during a tap or hold drag
+            // belongs to the button that drag already holds.
+            let is_touchpad = event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD;
+            if !is_touchpad || (event.pointer_count == 1 && state.button_held.is_none()) {
                 let button = pressed_mouse_button.unwrap_or(MouseButton::Left);
                 state.button_held = Some(button);
                 state.primary_down = None;
@@ -900,15 +880,17 @@ pub(crate) fn translate(
             }
         }
         JAVA_ACTION_BUTTON_RELEASE => {
-            if event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD {
-                // touchpad noise: drop on the floor (matches PRESS)
-            } else if let Some(button) = state.button_held.take() {
+            if let Some(button) = state.button_held.take() {
                 out.push(PlatformInput::MouseUp(MouseUpEvent {
                     button,
-                    position: cursor,
+                    position: state.hold_drag_cursor.take().unwrap_or(cursor),
                     modifiers,
                     click_count: state.clicks.click_count(),
                 }));
+                state.drag_active = false;
+                state.drag_lock_pending_at = None;
+                state.drag_lock_resume_at = None;
+                set_hold_drag_active(window_id, false);
             }
         }
         JAVA_ACTION_SCROLL => {
@@ -1018,4 +1000,174 @@ fn read_floats<'local>(
         buf.clear();
     }
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SOURCE_MOUSE: i32 = 0x2002;
+
+    fn feed(
+        state: &mut CapturedPointerState,
+        action_masked: i32,
+        source: i32,
+        pointer_count: usize,
+        delta_x: f32,
+        cursor_x: f32,
+    ) -> Vec<PlatformInput> {
+        let event = CapturedEvent {
+            window_id: PRIMARY_WINDOW_ID + 1000,
+            action_masked,
+            source,
+            button_state: 0,
+            meta_state: 0,
+            pointer_count,
+            rxs: vec![delta_x; pointer_count],
+            rys: vec![0.0; pointer_count],
+            vscroll: 0.0,
+            hscroll: 0.0,
+            cursor_physical_x: cursor_x,
+            cursor_physical_y: 0.0,
+        };
+        translate(state, event, 1.0, GestureTuning::default())
+    }
+
+    fn pad(
+        state: &mut CapturedPointerState,
+        action_masked: i32,
+        pointer_count: usize,
+        delta_x: f32,
+        cursor_x: f32,
+    ) -> Vec<PlatformInput> {
+        feed(
+            state,
+            action_masked,
+            ANDROID_SOURCE_TOUCHPAD,
+            pointer_count,
+            delta_x,
+            cursor_x,
+        )
+    }
+
+    #[test]
+    fn pressing_the_pad_drags_until_it_is_released() {
+        let mut state = CapturedPointerState::default();
+        assert!(pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.).is_empty());
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_BUTTON_PRESS, 1, 0., 10.).as_slice(),
+            [PlatformInput::MouseDown(down)] if down.button == MouseButton::Left
+        ));
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_MOVE, 1, 40., 50.).as_slice(),
+            [PlatformInput::MouseMove(moved)] if moved.pressed_button == Some(MouseButton::Left)
+        ));
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 1, 0., 50.).as_slice(),
+            [PlatformInput::MouseUp(up)] if up.position.x == px(50.)
+        ));
+        assert!(pad(&mut state, JAVA_ACTION_UP, 1, 0., 50.).is_empty());
+    }
+
+    #[test]
+    fn lifting_the_finger_ends_a_press_the_pad_never_released() {
+        let mut state = CapturedPointerState::default();
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        pad(&mut state, JAVA_ACTION_BUTTON_PRESS, 1, 0., 10.);
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_UP, 1, 0., 10.).as_slice(),
+            [PlatformInput::MouseUp(_)]
+        ));
+        assert!(pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 1, 0., 10.).is_empty());
+    }
+
+    #[test]
+    fn a_finger_without_a_press_only_moves_the_pointer() {
+        let mut state = CapturedPointerState::default();
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_MOVE, 1, 40., 50.).as_slice(),
+            [PlatformInput::MouseMove(moved)] if moved.pressed_button.is_none()
+        ));
+        assert!(pad(&mut state, JAVA_ACTION_UP, 1, 0., 50.).is_empty());
+    }
+
+    #[test]
+    fn a_press_with_two_fingers_stays_a_right_click() {
+        let mut state = CapturedPointerState::default();
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        pad(&mut state, JAVA_ACTION_POINTER_DOWN, 2, 0., 10.);
+        assert!(pad(&mut state, JAVA_ACTION_BUTTON_PRESS, 2, 0., 10.).is_empty());
+        assert!(pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 2, 0., 10.).is_empty());
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_POINTER_UP, 2, 0., 10.).as_slice(),
+            [PlatformInput::MouseDown(down), PlatformInput::MouseUp(_)]
+                if down.button == MouseButton::Right
+        ));
+    }
+
+    #[test]
+    fn a_second_finger_during_a_press_continues_the_same_drag() {
+        let mut state = CapturedPointerState::default();
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        state.first_finger_at = Some(Instant::now() - HOLD_DRAG_THRESHOLD);
+        pad(&mut state, JAVA_ACTION_BUTTON_PRESS, 1, 0., 10.);
+        assert!(pad(&mut state, JAVA_ACTION_POINTER_DOWN, 2, 0., 10.).is_empty());
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_MOVE, 2, 20., 10.).as_slice(),
+            [PlatformInput::MouseMove(moved)]
+                if moved.pressed_button == Some(MouseButton::Left) && moved.position.x == px(50.)
+        ));
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 2, 0., 10.).as_slice(),
+            [PlatformInput::MouseUp(up)] if up.position.x == px(50.)
+        ));
+        assert!(!state.drag_active);
+    }
+
+    #[test]
+    fn a_press_during_a_tap_drag_sends_no_second_mouse_down() {
+        let mut state = CapturedPointerState::default();
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        pad(&mut state, JAVA_ACTION_UP, 1, 0., 10.);
+        pad(&mut state, JAVA_ACTION_DOWN, 1, 0., 10.);
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_MOVE, 1, 10., 20.).as_slice(),
+            [PlatformInput::MouseDown(_), PlatformInput::MouseMove(_)]
+        ));
+        assert!(pad(&mut state, JAVA_ACTION_BUTTON_PRESS, 1, 0., 20.).is_empty());
+        assert!(matches!(
+            pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 1, 0., 20.).as_slice(),
+            [PlatformInput::MouseUp(_)]
+        ));
+    }
+
+    #[test]
+    fn a_mouse_button_still_clicks() {
+        let mut state = CapturedPointerState::default();
+        assert!(matches!(
+            feed(
+                &mut state,
+                JAVA_ACTION_BUTTON_PRESS,
+                SOURCE_MOUSE,
+                1,
+                0.,
+                10.
+            )
+            .as_slice(),
+            [PlatformInput::MouseDown(_)]
+        ));
+        assert!(matches!(
+            feed(
+                &mut state,
+                JAVA_ACTION_BUTTON_RELEASE,
+                SOURCE_MOUSE,
+                1,
+                0.,
+                10.
+            )
+            .as_slice(),
+            [PlatformInput::MouseUp(_)]
+        ));
+    }
 }

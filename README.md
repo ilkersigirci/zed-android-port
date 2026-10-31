@@ -38,6 +38,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Long press in the terminal opens its context menu, with **Open in Browser** for a selected link.
 - A physical keyboard types what the layout in Android's settings says, including AltGr characters and dead keys, and letters a US keyboard doesn't have still work in shortcuts.
 - Ctrl+click, Shift+click and Alt+click work with a mouse or trackpad, Ctrl+tap opens links, and horizontal wheel scrolling works.
+- On the Book Cover trackpad, pressing until it clicks and sliding drags, as with a mouse: selecting text, or moving tabs and project panel entries.
 - Samsung DeX: clicks and hover land under the pointer in freeform windows. The Book Cover trackpad follows your finger in landscape, and its two-finger scrolls glide on after the fingers lift, as finger scrolls do.
 
 **Windows**
