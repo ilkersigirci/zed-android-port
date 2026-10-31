@@ -74,7 +74,8 @@ The rest of 0.10.0's device checks passed on the tablet on 2026-10-30. These two
 Considered and left as they are:
 
 - **Android's "pasted from" toast.** `readClipboardText` calls `getPrimaryClip`, which on Android 12 and later can show the system's clipboard-access toast when the clip came from another app, and Zed reads the clipboard to enable Paste in menus. Reading `getPrimaryClipDescription` instead for those checks would need gpui to tell the two reads apart. Tablet check: copy text in another app, come back to Zdroid and open a menu; a toast there is this.
-- **R8 stays off** (`isMinifyEnabled`). The Kotlin side is a few hundred KB of a 150 MB APK, every class is reached by name from JNI, so it would keep nearly everything, and a missed keep rule fails only at runtime on a device.
+- **R8 stays off** (`isMinifyEnabled`). `classes.dex` is 5.8 MB of a 108 MB APK, mostly AndroidX and Kotlin's standard library, so shrinking would save about 4 MB. Rust and GameActivity's native code reach classes by name over JNI, and a missed keep rule fails only at runtime, on whichever path it hits.
+- **`ureq` in the updater.** `updater.rs` downloads with its own HTTP client instead of the app's. Moving it to `cx.http_client()` would drop a dependency, but a mistake there can't be fixed by an update, so it stays unless `ureq` becomes a problem.
 - **Vulkan pre-rotation.** wgpu always asks for an identity `preTransform`, so in landscape the compositor rotates each frame from the panel's portrait frame. Android recommends rendering rotated instead, which needs changes in wgpu and gpui's renderer. Measure composition with `dumpsys SurfaceFlinger` on the tablet first.
 
 ## Findings from 0.10.0 on the tablet, 2026-10-29

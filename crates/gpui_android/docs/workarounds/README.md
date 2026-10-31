@@ -98,7 +98,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Multi-Activity OS-chromed extra windows](multi-activity-os-chrome.md) | Active | Each `cx.open_window` past the first becomes a separate Activity task → OS provides freeform chrome on DeX/desktop windowing |
-| [`ZedApplication` for AppCompatActivity native lib load](zedapplication-loadlibrary.md) | Active | AppCompatActivity has no GameActivity meta-data hook → centralize `System.loadLibrary` in Application.onCreate |
+| [Loading the native library](load-native-library.md) | Active | `NativeBridge` loads it on first use: `AppCompatActivity` doesn't, and `Application.onCreate` would also run for every documents provider query |
 | [JNI exception clear after error](jni-exception-clear-after-error.md) | Active | Pending Java exception from a failed JNI call aborts process on next JNI; must clear |
 | [`futures::oneshot::Receiver::try_recv` semantics](futures-oneshot-tryrecv-semantics.md) | Active | `Ok(None)` means "not ready", not "channel dropped" — easy off-by-semantic bug |
 | [Android 16 freeform configChanges (exhaustive)](android16-config-changes-resize.md) | Active | Drag-resize destroys Activity by default; declare every config to handle ourselves |

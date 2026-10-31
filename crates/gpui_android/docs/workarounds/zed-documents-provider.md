@@ -166,6 +166,6 @@ contents (visible: projects, storage, plus any non-hidden files). Standard SAF a
 
 - Termux source we ported from:
   `termux/termux-app/app/src/main/java/com/termux/filepicker/TermuxDocumentsProvider.java`
-- [`ZedApplication` for native lib load](zedapplication-loadlibrary.md)
+- [Loading the native library](load-native-library.md)
   — the same Application also does the `loadLibrary`, gated by the
   same provider-attaches-pre-Activity ordering.

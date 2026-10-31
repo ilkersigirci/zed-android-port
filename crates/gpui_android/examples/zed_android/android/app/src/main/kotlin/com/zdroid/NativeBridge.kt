@@ -13,6 +13,13 @@ import android.view.Surface
 /// `Java_com_zdroid_NativeBridge_<methodName>` symbols. Class name
 /// changes here require matching renames on the Rust side.
 object NativeBridge {
+    // Here rather than in `Application.onCreate`, which also runs when only the
+    // documents provider or a broadcast started the process: this library holds
+    // the whole editor. GameActivity also loads it, which changes nothing.
+    init {
+        System.loadLibrary("zed_android")
+    }
+
     /// Process-death recovery probe. `ExtraWindowActivity.onCreate` calls
     /// this BEFORE any other JNI work. Returns true if the gpui-side has a
     /// live AndroidWindow registered for this `windowId` (this Activity was

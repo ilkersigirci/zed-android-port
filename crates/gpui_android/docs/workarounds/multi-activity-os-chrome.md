@@ -190,7 +190,7 @@ drop and is reachable from the drain handler via `extra_windows`.
 - [Android 16 freeform configChanges](android16-config-changes-resize.md) — drag-resize destroys Activity by default
 - [`documentLaunchMode` implies Intent flags](document-launch-mode-implies-flags.md)
 - [Cold Activity launch timeout (4s)](activity-launch-cold-timeout.md)
-- [`ZedApplication` for AppCompatActivity native lib load](zedapplication-loadlibrary.md)
+- [Loading the native library](load-native-library.md)
 - [JNI exception clear after error](jni-exception-clear-after-error.md)
 - [`futures::oneshot::Receiver::try_recv` semantics](futures-oneshot-tryrecv-semantics.md)
 - [Process-death recovery for extra windows](process-death-recovery-extra-windows.md)
