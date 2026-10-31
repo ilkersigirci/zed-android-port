@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use android_activity::AndroidApp;
+use android_activity::{AndroidApp, MainEvent, PollEvent};
 use anyhow::{Context as _, Result};
 use fs::Fs;
 use futures::StreamExt as _;
@@ -85,9 +85,15 @@ pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
             }
         });
         // gpui isn't listening yet. What these events leave behind, it reads
-        // when it opens its window.
+        // when it opens its window, except the Activity going away:
+        // `MainActivity.onDestroy` waits for this thread to end, and the next
+        // launch sweeps what the extraction left in its staging folder.
         while !extraction.is_finished() {
-            app.poll_events(Some(Duration::from_millis(50)), |_event| {});
+            app.poll_events(Some(Duration::from_millis(50)), |event| {
+                if matches!(event, PollEvent::Main(MainEvent::Destroy)) {
+                    std::process::exit(0);
+                }
+            });
         }
         extraction
             .join()

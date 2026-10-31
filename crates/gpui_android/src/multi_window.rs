@@ -29,14 +29,6 @@
 //!   `finishAndRemoveTask` on the stored ref.
 //! - `nativeOnExtraActivityDestroyed` removes the ref (drops the `GlobalRef`)
 //!   AND posts `OsClosed` so the gpui-side window can be reaped.
-//!
-//! **Thread constraint:** map mutations (insert + remove) must happen from
-//! the gpui main thread only. The `jni` crate calls `DeleteGlobalRef` via
-//! whatever `JNIEnv` the dropping thread can attach via
-//! `JavaVM::attach_current_thread`. Drops on a non-attachable thread (e.g. a
-//! tokio worker after its `AttachGuard` has been released) silently leak.
-//! The gpui main thread stays attached for the App's lifetime; doing all map
-//! work from the drain handler is the safe choice.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};

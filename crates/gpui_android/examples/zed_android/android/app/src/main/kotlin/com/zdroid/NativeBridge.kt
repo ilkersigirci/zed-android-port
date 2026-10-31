@@ -130,7 +130,7 @@ object NativeBridge {
     /// extra window's id for spawned windows.
     external fun isHoldDragActive(windowId: Long): Boolean
 
-    /// Captured-pointer sink, called only by [forwardCapturedPointer].
+    /// Captured-pointer sink, called only by [WindowPointer].
     /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
     /// window's id. `rxs`/`rys` are `AXIS_RELATIVE_X` /
     /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
@@ -200,10 +200,9 @@ object NativeBridge {
     /// as motions and operators).
     external fun nativeImeRouteAsKeys(windowId: Long): Boolean
 
-    /// Mirror Kotlin's `imeShown` flag into the Rust-side global
-    /// `SOFT_KEYBOARD_VISIBLE` atomic. Pushed on every transition
-    /// (showSoftInput / hideSoftInputFromWindow / WindowInsetsListener
-    /// edge). The status bar keyboard button reads this via
+    /// Whether the on-screen keyboard is up, from [WindowIme], into the
+    /// Rust-side global `SOFT_KEYBOARD_VISIBLE` atomic. The status bar
+    /// keyboard button reads this via
     /// `gpui_android::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)

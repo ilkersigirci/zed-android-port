@@ -74,7 +74,6 @@ use jni::objects::{JFloatArray, JObject};
 
 use crate::events::click_track::ClickTrackState;
 use crate::events::mouse::{self, button_from_state};
-use crate::events::source::InputSource;
 use crate::events::{
     JAVA_ACTION_BUTTON_PRESS, JAVA_ACTION_BUTTON_RELEASE, JAVA_ACTION_CANCEL, JAVA_ACTION_DOWN,
     JAVA_ACTION_MOVE, JAVA_ACTION_POINTER_DOWN, JAVA_ACTION_POINTER_UP, JAVA_ACTION_SCROLL,
@@ -792,10 +791,7 @@ pub(crate) fn translate(
                 && anchor.elapsed() < TAP_WINDOW
                 && state.motion_accum <= TAP_MOTION_PX
             {
-                let click_count =
-                    state
-                        .clicks
-                        .next_click_count(MouseButton::Left, cursor, InputSource::Touchpad);
+                let click_count = state.clicks.next_click_count(MouseButton::Left, cursor);
                 out.push(PlatformInput::MouseDown(MouseDownEvent {
                     button: MouseButton::Left,
                     position: cursor,
@@ -893,9 +889,7 @@ pub(crate) fn translate(
                 let button = pressed_mouse_button.unwrap_or(MouseButton::Left);
                 state.button_held = Some(button);
                 state.primary_down = None;
-                let click_count = state
-                    .clicks
-                    .next_click_count(button, cursor, InputSource::Mouse);
+                let click_count = state.clicks.next_click_count(button, cursor);
                 out.push(PlatformInput::MouseDown(MouseDownEvent {
                     button,
                     position: cursor,
@@ -971,9 +965,8 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_isHoldDragActive<'local>(
     is_hold_drag_active(window_id as u64)
 }
 
-/// Sink for `NativeBridge.nativeOnCapturedPointer`, which Kotlin's
-/// `forwardCapturedPointer` calls for both MainActivity
-/// (`PRIMARY_WINDOW_ID`) and spawned `ExtraWindowActivity` windows.
+/// Sink for `NativeBridge.nativeOnCapturedPointer`, which `WindowPointer.kt`
+/// calls for the main window (`PRIMARY_WINDOW_ID`) and extra windows.
 /// Builds a `CapturedEvent` and queues it for the game thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'local>(

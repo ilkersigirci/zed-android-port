@@ -123,19 +123,14 @@ pub(crate) fn translate_motion_event(
             if let Some(button) = pressed_mouse_button
                 && button != MouseButton::Left
             {
-                let click_count = state
-                    .clicks
-                    .next_click_count(button, position, input_source);
+                let click_count = state.clicks.next_click_count(button, position);
                 state.clicks.mark_non_primary_down(button);
                 out.push(mouse::button_down(button, position, modifiers, click_count));
                 return out.into();
             }
             // Mouse left button down. Latch position + time and emit
             // Down(Left) immediately for instant click feedback.
-            let click_count =
-                state
-                    .clicks
-                    .next_click_count(MouseButton::Left, position, input_source);
+            let click_count = state.clicks.next_click_count(MouseButton::Left, position);
             state.clicks.record_primary_down(position);
             out.push(mouse::button_down(
                 MouseButton::Left,

@@ -8,19 +8,22 @@
 //!   button-down (right / middle / nav). The matching Up resolves to
 //!   the same button rather than defaulting to Left.
 //! - **Last click run.** Time + position + button + run length of the
-//!   most recent Down. A new Down within the source-specific window +
-//!   slop bumps the run length; the editor's word- / line-select keys
-//!   off the resulting `click_count`.
+//!   most recent Down. A new Down close enough in time and place bumps
+//!   the run length; the editor's word- / line-select keys off the
+//!   resulting `click_count`.
 //!
 //! Per-window owned (lives as a field on `AndroidWindowState`). Each
 //! window has its own click state so a tap in window A doesn't bleed
 //! into window B's double-click run.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{MouseButton, Pixels, Point};
 
-use crate::events::source::{InputSource, multi_click_slop, multi_click_window};
+/// As Zed's Linux backends do (`DOUBLE_CLICK_INTERVAL` and
+/// `DOUBLE_CLICK_DISTANCE` in `gpui_linux`).
+const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+const MULTI_CLICK_DISTANCE: f64 = 5.0;
 
 /// Per-window click + button-state tracker. Default = all `None`.
 #[derive(Default)]
@@ -32,8 +35,7 @@ pub(crate) struct ClickTrackState {
     /// Set when the dispatcher emits its Down so the matching Up
     /// resolves to the same button.
     held_non_primary: Option<MouseButton>,
-    /// Last Down's timestamp + position + button + run length. A new
-    /// Down within source-specific window + slop bumps the run.
+    /// Last Down's timestamp + position + button + run length.
     last_click: Option<(Instant, Point<Pixels>, MouseButton, usize)>,
 }
 
@@ -66,38 +68,26 @@ impl ClickTrackState {
         self.held_non_primary
     }
 
-    /// Compute the `click_count` for a new Down at `position` with
-    /// `button` on `source`. Same-button Down within
-    /// `multi_click_window(source)` + `multi_click_slop(source)` of the
-    /// previous bumps the run; otherwise resets to 1. Caller stamps
-    /// the returned count onto the emitted `MouseDownEvent` so the
-    /// editor's double/triple-click selection works.
+    /// The `click_count` for a new Down of `button` at `position`, which the
+    /// caller puts on the `MouseDownEvent`: the same button, close enough in
+    /// time and place to the last Down, continues its run.
     pub(crate) fn next_click_count(
         &mut self,
         button: MouseButton,
         position: Point<Pixels>,
-        source: InputSource,
     ) -> usize {
         let now = Instant::now();
-        let window = multi_click_window(source);
-        let slop = multi_click_slop(source);
         let count = match self.last_click {
-            Some((t, p, b, c))
-                if b == button
-                    && now.duration_since(t) < window
-                    && (position - p).magnitude() <= slop =>
+            Some((last_time, last_position, last_button, last_count))
+                if last_button == button
+                    && now.duration_since(last_time) < MULTI_CLICK_INTERVAL
+                    && (position - last_position).magnitude() <= MULTI_CLICK_DISTANCE =>
             {
-                c + 1
+                last_count + 1
             }
             _ => 1,
         };
         self.last_click = Some((now, position, button, count));
-        if count > 1 {
-            log::debug!(
-                "multi_click: source={source:?} count={count} window={window:?} \
-                 slop={slop} button={button:?}"
-            );
-        }
         count
     }
 

@@ -635,10 +635,9 @@ impl AndroidWindow {
             let state = self.ptr.state.borrow();
             (state.android_app.clone(), state.extra_window_id)
         };
-        // Set our view of the keyboard before the asynchronous JNI call:
-        // Kotlin confirms 100-500 ms later, after the IME animation, and a
-        // button showing the old state that long reads as a missed tap.
-        // Kotlin's insets listener corrects it if the request fails.
+        // Set our view of the keyboard before the asynchronous JNI call: a
+        // button showing the old state until the keyboard moves reads as a
+        // missed tap. `WindowIme.kt` corrects it if the request does nothing.
         crate::ime::SOFT_KEYBOARD_VISIBLE.store(show, std::sync::atomic::Ordering::Release);
         crate::ime::request_keyboard(&android_app, extra_window_id, show);
     }

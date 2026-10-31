@@ -466,8 +466,8 @@ impl AndroidPlatform {
             return None;
         }
         let nw = self.android_app.native_window()?;
-        let screen_w = nw.width() as i32;
-        let screen_h = nw.height() as i32;
+        let screen_w = nw.width();
+        let screen_h = nw.height();
         if screen_w <= 0 || screen_h <= 0 {
             return None;
         }
@@ -1612,10 +1612,8 @@ impl Platform for AndroidPlatform {
             // at full CPU instead of merely running hot.
             let receiver = self.common.borrow().main_receiver.clone();
             let batch: Vec<_> = receiver.try_iter().collect();
-            for runnable in batch {
-                if let Ok(runnable) = runnable {
-                    runnable.run();
-                }
+            for runnable in batch.into_iter().flatten() {
+                runnable.run();
             }
 
             // Drain input events into the active window. We call this every

@@ -29,6 +29,7 @@ use gpui::{
     ScrollEvent, ScrollSource, TouchId, TouchPhase, point, px,
 };
 
+use crate::events::click_track::ClickTrackState;
 use crate::events::keyboard;
 use crate::events::{
     JAVA_ACTION_CANCEL, JAVA_ACTION_DOWN, JAVA_ACTION_MOVE, JAVA_ACTION_POINTER_DOWN,
@@ -262,12 +263,11 @@ fn centroid(pointers: &[TouchPointer]) -> Point<Pixels> {
 //   - 2-finger tap → right-click at the cursor.
 //   - 2-finger drag → `Scroll` based on centroid Y-delta.
 //
-// The virtual cursor lives on Kotlin's side (`MainActivity.cursorX/Y`,
-// same SurfaceControl overlay the hardware trackpad uses) and we keep
-// a Rust-side mirror in `TrackpadTouchState::cursor` so the emitted
-// `MouseDown`/`MouseMove` events have the correct position. Each move
-// fires a JNI call to `MainActivity.setTrackpadCursorPosition` to
-// keep the sprite in sync.
+// The virtual cursor lives on Kotlin's side (`WindowPointer.kt`, same
+// SurfaceControl overlay the hardware trackpad uses) and we keep a Rust-side
+// mirror in `TrackpadTouchState::cursor` so the emitted `MouseDown`/`MouseMove`
+// events have the correct position. Each move fires a JNI call to the
+// Activity's `setTrackpadCursorPosition` to keep the sprite in sync.
 
 /// Click vs drag threshold: motion above this on the touch surface
 /// commits the gesture to drag (cursor motion); below it, lift is a
@@ -350,11 +350,13 @@ pub(crate) struct TrackpadTouchState {
     phase: TrackpadGesturePhase,
     /// Last centroid for 2-finger scroll delta computation.
     scroll_centroid: Option<Point<Pixels>>,
-    /// Virtual cursor position in physical pixels (decorView space —
-    /// matches `MainActivity.cursorX/Y` convention). Updated by
+    /// Virtual cursor position in physical pixels (decorView space,
+    /// as `WindowPointer.kt` keeps it). Updated by
     /// single-finger drag deltas; read by all gesture emit branches
     /// so synthesized mouse events fire at the right position.
     cursor: Point<Pixels>,
+    /// The run of taps, for double and triple clicks.
+    clicks: ClickTrackState,
 }
 
 impl TrackpadTouchState {
@@ -362,7 +364,7 @@ impl TrackpadTouchState {
     /// cursor sprite on the Kotlin side. `scale_factor` converts
     /// between gpui's logical-pixel coordinate space (`self.cursor`,
     /// emitted to MouseMove / MouseDown) and the physical-pixel
-    /// space the Kotlin cursor sprite lives in (`MainActivity.cursorX/Y`,
+    /// space the Kotlin cursor sprite lives in (`WindowPointer.kt`,
     /// matching the captured-trackpad convention). Coordinates passed
     /// to gpui events come from `self.cursor`, not the raw touch
     /// position — that's the whole point of trackpad mode.
@@ -610,18 +612,20 @@ impl TrackpadTouchState {
                             modifiers,
                             pressed_button: None,
                         }));
+                        let click_count =
+                            self.clicks.next_click_count(MouseButton::Left, self.cursor);
                         out.push(PlatformInput::MouseDown(MouseDownEvent {
                             button: MouseButton::Left,
                             position: self.cursor,
                             modifiers,
-                            click_count: 1,
+                            click_count,
                             first_mouse: false,
                         }));
                         out.push(PlatformInput::MouseUp(MouseUpEvent {
                             button: MouseButton::Left,
                             position: self.cursor,
                             modifiers,
-                            click_count: 1,
+                            click_count,
                         }));
                     }
                     TrackpadGesturePhase::HoldDrag => {

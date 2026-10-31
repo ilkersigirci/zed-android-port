@@ -118,10 +118,15 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
     @Suppress("unused")
     fun moveOwnTaskToFront() {
         runOnUiThread {
-            getSystemService(ActivityManager::class.java)
-                ?.appTasks
-                ?.firstOrNull { it.taskInfo.taskId == taskId }
-                ?.moveToFront()
+            try {
+                getSystemService(ActivityManager::class.java)
+                    ?.appTasks
+                    ?.firstOrNull { it.taskInfo.taskId == taskId }
+                    ?.moveToFront()
+            } catch (error: RuntimeException) {
+                // Android throws for a task that ended while this looked at it.
+                Log.w(TAG, "couldn't bring windowId=$windowId to the front", error)
+            }
         }
     }
 

@@ -2,6 +2,7 @@ package com.zdroid
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.ActivityOptions
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -14,7 +15,6 @@ import android.database.ContentObserver
 import android.graphics.Rect
 import android.graphics.drawable.Animatable
 import android.hardware.input.InputManager
-import android.app.ActivityOptions
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -41,9 +41,6 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
 import java.security.MessageDigest
@@ -365,8 +362,9 @@ class MainActivity : GameActivity(), ZdroidWindow {
             ?.text
             ?.toString()
 
-    /// On the UI thread, in the order of the calls, because the binder call can
-    /// outlast a frame.
+    /// On the UI thread, in the order of the calls. `setPrimaryClip` is a binder
+    /// call that can outlast a frame, and it overflowed `android_main`'s stack
+    /// from deep in gpui's dispatch.
     @Suppress("unused") // called from Rust via JNI
     fun writeClipboardText(text: String) {
         runOnUiThread {
@@ -646,20 +644,27 @@ class MainActivity : GameActivity(), ZdroidWindow {
     /// the same certificates as the running build. The installer would
     /// reject a different signer anyway, but a different package would
     /// install as a separate app.
+    @Suppress("DEPRECATION")
     private fun isTrustedUpdateApk(file: File): Boolean {
         return try {
-            val flags = PackageManager.GET_SIGNING_CERTIFICATES
+            // Android 9 left signingInfo unset for APK archives. If this ever
+            // refused a good APK, no update could fix it, so the legacy
+            // signatures stay as a fallback.
+            val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
             val current = packageManager.getPackageInfo(packageName, flags)
             val archive = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
                 ?: return false
             if (archive.packageName != packageName) return false
 
-            fun signerDigests(info: PackageInfo): Set<String> =
-                info.signingInfo?.apkContentsSigners.orEmpty().map { signature ->
+            fun signerDigests(info: PackageInfo): Set<String> {
+                val signers = info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
+                    ?: info.signatures.orEmpty()
+                return signers.map { signature ->
                     MessageDigest.getInstance("SHA-256")
                         .digest(signature.toByteArray())
                         .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
                 }.toSet()
+            }
 
             val currentSigners = signerDigests(current)
             currentSigners.isNotEmpty() && currentSigners == signerDigests(archive)
@@ -737,27 +742,12 @@ class MainActivity : GameActivity(), ZdroidWindow {
         }
     }
 
-    /// Force a clean process exit when the Activity is destroyed.
-    ///
-    /// gpui_android has multiple static-state init paths (event channels,
-    /// JNI globals, OnceLock guards) that assume process-scoped uniqueness.
-    /// Android keeps the .so resident across Activity destroy/recreate
-    /// cycles when memory pressure or AL_Kill reaps just the Activity but
-    /// not the whole process. The next `android_main` re-entry then tries
-    /// to re-initialize those statics, which either panics outright
-    /// (multi_window event channel: "called twice") or silently leaves the
-    /// new gpui state observing stale callbacks bound to the previous
-    /// Activity.
-    ///
-    /// We've declared every config-change axis we care about in
-    /// AndroidManifest.xml (`android:configChanges="orientation|...|
-    /// uiMode|fontScale|..."`), so rotation, DeX, dark-mode flips, etc.
-    /// don't destroy the Activity in the first place — those keep the
-    /// process and Activity continuous, no re-entry. The only paths that
-    /// reach `onDestroy` are genuine teardowns: user closed the app,
-    /// system killed for memory, finishAndRemoveTask. For those, killing
-    /// the process here guarantees the next launch starts fresh with
-    /// zero stale static state.
+    /// Ends the process with the Activity. `android_main` and gpui_android's
+    /// statics start once per process: `singleTask` in the manifest keeps a
+    /// second instance from starting beside this one, and `configChanges` keeps
+    /// rotation, DeX and dark mode from recreating it. So what reaches here is a
+    /// real teardown (the user closed the app, or Android reclaimed it), and the
+    /// next launch starts fresh.
     override fun onDestroy() {
         Log.i(
             TAG,

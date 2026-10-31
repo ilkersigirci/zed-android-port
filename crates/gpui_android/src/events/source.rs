@@ -25,7 +25,6 @@
 //!    `Touchpad` to enable it without affecting actual hardware mice.
 
 use android_activity::input::{MotionEvent, Source, ToolType};
-use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputSource {
@@ -65,33 +64,5 @@ pub(crate) fn classify(event: &MotionEvent) -> InputSource {
         Source::Stylus | Source::BluetoothStylus => InputSource::Stylus,
         Source::Touchpad => InputSource::Touchpad,
         _ => InputSource::Finger,
-    }
-}
-
-/// Time window in which a second / third Down counts as a double- /
-/// triple-click. Matches `ViewConfiguration.getDoubleTapTimeout()` for
-/// hardware (~300ms, the system default for indirect pointing) and
-/// keeps the historical 500ms for finger taps (a real-world tap-tap
-/// with a finger spans ~400ms at normal cadence). Tighter windows on
-/// hardware make rapid double-clicks feel responsive on a wired mouse.
-pub(crate) fn multi_click_window(source: InputSource) -> Duration {
-    match source {
-        InputSource::Mouse | InputSource::Stylus | InputSource::Touchpad => {
-            Duration::from_millis(300)
-        }
-        InputSource::Finger => Duration::from_millis(500),
-    }
-}
-
-/// Logical pixels between successive Downs before they're treated as
-/// separate gestures. Mouse / stylus aim is precise, so we want a tight
-/// slop or the editor will misclassify a deliberate two-spot click as
-/// a single double-click. Fingers wobble: 6px covers hand-jitter on a
-/// tap-tap without disqualifying intentional double-taps.
-pub(crate) fn multi_click_slop(source: InputSource) -> f64 {
-    match source {
-        InputSource::Mouse | InputSource::Stylus => 3.0,
-        InputSource::Touchpad => 4.0,
-        InputSource::Finger => 6.0,
     }
 }

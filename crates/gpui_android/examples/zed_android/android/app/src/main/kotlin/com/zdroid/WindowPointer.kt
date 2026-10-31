@@ -230,12 +230,12 @@ class WindowPointer(
     private fun movesCursor(event: MotionEvent): Boolean =
         event.pointerCount == 1 || NativeBridge.isHoldDragActive(windowId)
 
-    /// Direct touch hides the sprite, unless touch is what moves the cursor.
+    /// A finger or stylus on the screen hides the sprite, unless touch is what
+    /// moves the cursor.
     fun onTouchDispatched(event: MotionEvent) {
-        if (!trackpadModeActive &&
-            InputModality.isPointer() &&
-            event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)
-        ) {
+        val direct = event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) ||
+            event.isFromSource(InputDevice.SOURCE_STYLUS)
+        if (direct && !trackpadModeActive && InputModality.isPointer()) {
             InputModality.setNonPointer()
             applyCursorVisibility()
         }
