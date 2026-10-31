@@ -262,14 +262,6 @@ pub struct WgpuRenderer {
     observed_error_generation: u64,
     last_surface_error: Option<String>,
     needs_redraw: bool,
-    /// Color the main pass clears to before drawing the scene. Defaults
-    /// to fully transparent so the desktop compositor can blend the
-    /// gpui frame with whatever is behind it (window decorations,
-    /// transparent shadows, etc.). Embedders that own the entire
-    /// surface and want to avoid the brief black flash between
-    /// `SurfaceView` attach and the first scene paint can set this
-    /// to an opaque brand color via `set_clear_color`.
-    clear_color: wgpu::Color,
 }
 
 impl WgpuRenderer {
@@ -493,7 +485,6 @@ impl WgpuRenderer {
             observed_error_generation: 0,
             last_surface_error: None,
             needs_redraw: false,
-            clear_color: wgpu::Color::TRANSPARENT,
         })
     }
 }
@@ -1123,17 +1114,6 @@ impl WgpuRenderer {
         self.max_texture_size
     }
 
-    /// Override the per-frame clear color. Embedders that own the
-    /// entire surface (Android via SurfaceView, embedded apps, etc.)
-    /// should set this to an opaque brand color so the first wgpu
-    /// frame replaces the SurfaceView's default-black buffer with
-    /// the right hue instead of a black flash. Default
-    /// `wgpu::Color::TRANSPARENT` is correct for desktop compositors
-    /// that blend the gpui frame with system chrome behind it.
-    pub fn set_clear_color(&mut self, color: wgpu::Color) {
-        self.clear_color = color;
-    }
-
     pub fn draw(&mut self, scene: &Scene) -> bool {
         #[cfg(target_family = "wasm")]
         if self.device_lost() {
@@ -1215,11 +1195,7 @@ impl WgpuRenderer {
             &frame_view,
             size,
             premultiplied_alpha,
-            // `clear_color` defaults to TRANSPARENT (desktop compositors
-            // blend gpui with chrome behind it); Android sets an opaque
-            // color via set_clear_color so the first frame doesn't flash
-            // SurfaceView black.
-            self.clear_color,
+            wgpu::Color::TRANSPARENT,
         ) {
             log::error!("{error:#}");
             return false;
@@ -2283,7 +2259,6 @@ impl WgpuRenderer {
         self.atlas.handle_device_lost(context);
 
         let is_bgr = self.is_bgr;
-        let clear_color = self.clear_color;
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
@@ -2293,7 +2268,6 @@ impl WgpuRenderer {
             self.atlas.clone(),
         )?;
         self.set_subpixel_layout(is_bgr);
-        self.set_clear_color(clear_color);
 
         log::info!("GPU recovery complete");
         Ok(())

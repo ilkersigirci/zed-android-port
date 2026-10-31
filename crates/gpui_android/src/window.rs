@@ -335,23 +335,7 @@ impl AndroidWindowStatePtr {
             log::info!("AndroidWindow::attach_surface: replaced surface ({width}x{height})");
         } else {
             let gpu_context = state.gpu_context.clone();
-            let mut renderer = WgpuRenderer::new(gpu_context, &raw_window, config, None)?;
-            // Brand-color clear so the very first wgpu frame replaces
-            // the SurfaceView's default-black buffer with brand indigo
-            // instead of a black flash between SurfaceView attach and
-            // the first scene paint. Matches `@color/zdroid_bg` (#1E1E2E
-            // = 30/255 ≈ 0.1176) so the visual handoff is:
-            //   SplashActivity AVD → MainActivity windowBackground
-            //   (static icon over indigo) → SurfaceView indigo → editor
-            // with no black gap anywhere. Desktop wgpu embedders keep
-            // the default transparent clear; this is an Android-only
-            // override because we own the entire surface.
-            renderer.set_clear_color(wgpu::Color {
-                r: 30.0 / 255.0,
-                g: 30.0 / 255.0,
-                b: 46.0 / 255.0,
-                a: 1.0,
-            });
+            let renderer = WgpuRenderer::new(gpu_context, &raw_window, config, None)?;
             state.renderer = Some(renderer);
             log::info!("AndroidWindow::attach_surface: created renderer ({width}x{height})");
         }
