@@ -29,12 +29,14 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - The Agent Panel runs ACP agents such as Claude Code and Codex, locally in the Ubuntu runtime and on SSH remotes, and Google Antigravity on SSH remotes. Keep and Reject buttons review their edits.
 - Zed's own agent and inline assistant work with your API keys: hosted providers such as Anthropic, OpenAI, Google and OpenRouter, and OpenAI-compatible endpoints ([details](#ai)).
 - The screen stays on while an agent works.
+- Images you copy in another app paste into the agent's message box.
 
 **Touch, keyboard and pointer**
 
-- Zed's touch gestures: momentum scrolling, double-tap to select a word, and two-finger swipes that scroll. A finger also drags pane splitters and dock edges. Tabs always show their close button.
+- Zed's touch gestures: momentum scrolling, double-tap to select a word, and two-finger swipes that scroll. A finger also drags pane splitters and dock edges, and a long press followed by a drag moves tabs and project panel entries. Tabs always show their close button.
 - The on-screen keyboard behaves like other Android apps': it shows when you tap a text field or open a search box, not when you open a file, and the window's content stays above it. Its toggle is in the status bar.
 - Long press in the terminal opens its context menu, with **Open in Browser** for a selected link.
+- A physical keyboard types what the layout in Android's settings says, including AltGr characters and dead keys, and shortcuts stay on the same keys as on a US layout.
 - Ctrl+click, Shift+click and Alt+click work with a mouse or trackpad, Ctrl+tap opens links, and horizontal wheel scrolling works.
 - Samsung DeX: clicks and hover land under the pointer in freeform windows. The Book Cover trackpad follows your finger in landscape, and its two-finger scrolls glide on after the fingers lift, as finger scrolls do.
 
@@ -66,6 +68,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Updates work like desktop Zed's: an **Update Available** button in the title bar, hourly checks (`"auto_update": false` turns them off), download progress, and Android's install session API. An update must be signed with the release certificate.
 - Credentials are stored in the Android Keystore.
 - **Open with** in the Files app opens text and source files in Zdroid, where they are.
+- **Reveal in File Manager** opens the folder in Android's Files app, and **Open in Default App** opens a file in the app you pick, for files in your home folder and on shared storage.
 - **Open Folder**, **Open Files** and everything else that asks for a path, such as **Clone Repository**, use Zed's own path picker, which starts in the open project or your home folder and reaches `/sdcard` through `~/storage/shared`. Android's picker isn't used, so `"use_system_path_prompts"` has no effect.
 - Cloning into an existing folder or deleting folders from the Files app no longer loses data. Typed text isn't logged, and Android backups are off, since the home folder holds SSH keys and credentials.
 - APKs are built and signed in GitHub Actions with a provenance attestation: `gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port`.
@@ -169,6 +172,7 @@ Each surface toggles in **Settings → Android** (or on the first-run onboarding
 - **Two-finger tap** for right-click
 - **Long-press** to select a word
 - **Long-press and drag** to extend the selection
+- **Long-press and drag** on a tab or a project panel entry moves it
 - **Scrollbar tap and drag** snaps the thumb to your finger and follows
 
 ### Virtual trackpad mode

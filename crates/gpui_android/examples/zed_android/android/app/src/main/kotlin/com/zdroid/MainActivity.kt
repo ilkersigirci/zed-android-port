@@ -1,10 +1,12 @@
 package com.zdroid
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -30,6 +32,7 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceView
@@ -39,11 +42,17 @@ import android.view.ViewGroup
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.androidgamesdk.GameActivity
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /// Hosts gpui's main window, the one backing `android_app.native_window()`
 /// through GameActivity. Every other `cx.open_window` gets an
@@ -362,6 +371,63 @@ class MainActivity : GameActivity(), ZdroidWindow {
             ?.text
             ?.toString()
 
+    /// When the clip on the clipboard was set, if it may hold an image, else 0.
+    /// Reading the description is cheap and doesn't show Android's "pasted from"
+    /// toast, so Rust keeps an image it read for as long as this stays the same.
+    @Suppress("unused") // called from Rust via JNI
+    fun clipboardImageTimestamp(): Long {
+        val description = clipboard.primaryClipDescription ?: return 0
+        val mayHoldImage = description.hasMimeType("image/*") ||
+            description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST)
+        return if (mayHoldImage) description.timestamp else 0
+    }
+
+    /// The clip's first image, or null. Read on a thread of its own with a time
+    /// limit: Rust waits here on the thread that draws, and a content URI can be
+    /// backed by anything. `android_main`'s stack is also short for all of
+    /// `ContentResolver` when this is called from deep in gpui's dispatch.
+    @Suppress("unused") // called from Rust via JNI
+    fun readClipboardImage(): ClipboardImage? {
+        val clip = clipboard.primaryClip ?: return null
+        val uris = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+        if (uris.isEmpty()) return null
+        val read = FutureTask { firstImage(uris) }
+        Thread(read, "zdroid_clipboard").apply { isDaemon = true }.start()
+        return try {
+            read.get(CLIPBOARD_IMAGE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (error: ExecutionException) {
+            Log.w(TAG, "couldn't read an image from the clipboard", error)
+            null
+        } catch (error: TimeoutException) {
+            read.cancel(true)
+            Log.w(TAG, "reading an image from the clipboard took too long", error)
+            null
+        }
+    }
+
+    private fun firstImage(uris: List<Uri>): ClipboardImage? {
+        for (uri in uris) {
+            val mimeType = contentResolver.getType(uri) ?: continue
+            if (!mimeType.startsWith("image/")) continue
+            val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    output.write(buffer, 0, count)
+                    if (output.size() > CLIPBOARD_IMAGE_MAX_BYTES) {
+                        Log.w(TAG, "the clipboard's image is over $CLIPBOARD_IMAGE_MAX_BYTES bytes")
+                        return null
+                    }
+                }
+                output.toByteArray()
+            } ?: continue
+            return ClipboardImage(mimeType, bytes)
+        }
+        return null
+    }
+
     /// On the UI thread, in the order of the calls. `setPrimaryClip` is a binder
     /// call that can outlast a frame, and it overflowed `android_main`'s stack
     /// from deep in gpui's dispatch.
@@ -423,6 +489,82 @@ class MainActivity : GameActivity(), ZdroidWindow {
             }
         }
     }
+
+    /// Zed's "Reveal in File Manager". Android can't point a file manager at one
+    /// file, so this opens the folder that holds it in Android's Files app.
+    @Suppress("unused") // called from Rust via JNI
+    fun revealInFiles(path: String) {
+        runOnUiThread {
+            val file = File(path)
+            viewDocument(if (file.isDirectory) file else file.parentFile ?: file)
+        }
+    }
+
+    /// Zed's "Open in Default App": Android's usual choice of app, which can read
+    /// the file and write back to it.
+    @Suppress("unused") // called from Rust via JNI
+    fun openWithSystem(path: String) {
+        runOnUiThread { viewDocument(File(path)) }
+    }
+
+    private fun viewDocument(file: File) {
+        val uri = documentUri(file)
+        if (uri == null || !file.exists()) {
+            Toast.makeText(this, "Other apps can't open ${file.path}", Toast.LENGTH_LONG).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, contentResolver.getType(uri) ?: "*/*")
+            .addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        try {
+            startActivity(intent)
+        } catch (error: ActivityNotFoundException) {
+            Log.w(TAG, "no app opens ${file.path}", error)
+            Toast.makeText(this, "No app can open ${file.name}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /// The path's document in `ZedDocumentsProvider`, whose documents other apps
+    /// can be granted. It serves the home folder, which reaches shared storage
+    /// through `~/storage/shared`. Null for anything else, such as Zed's logs.
+    /// The hardcoded paths are other spellings Zed can be handed for these folders.
+    @SuppressLint("SdCardPath")
+    private fun documentUri(file: File): Uri? {
+        val home = File(filesDir, "home")
+        val shared = File(home, "storage/shared")
+        val spellings = listOf(
+            home to home,
+            File("/data/data/$packageName/files/home") to home,
+            Environment.getExternalStorageDirectory() to shared,
+            File("/sdcard") to shared,
+        )
+        val path = file.normalize()
+        val (spelling, folder) = spellings.firstOrNull { (spelling, _) ->
+            path.startsWith(spelling)
+        } ?: return null
+        val document = File(folder, path.relativeTo(spelling).path)
+        return DocumentsContract.buildDocumentUri("com.zdroid.documents", document.path)
+    }
+
+    /// What a key types on its keyboard's layout, as `KeyCharacterMap.get`
+    /// returns it. Looked up on each press because the layout can change in
+    /// Android's settings while Zdroid runs.
+    @Suppress("unused") // called from Rust via JNI
+    fun keyCharacter(deviceId: Int, keyCode: Int, metaState: Int): Int =
+        try {
+            KeyCharacterMap.load(deviceId).get(keyCode, metaState)
+        } catch (error: KeyCharacterMap.UnavailableException) {
+            Log.w(TAG, "no key map for input device $deviceId", error)
+            0
+        }
+
+    @Suppress("unused") // called from Rust via JNI
+    fun deadKeyCharacter(accent: Int, character: Int): Int =
+        KeyCharacterMap.getDeadChar(accent, character)
 
     /// Raw /sdcard paths need "All files access", a per-app toggle in system
     /// settings. Opened once per install at boot; the Android settings page
@@ -789,9 +931,14 @@ class MainActivity : GameActivity(), ZdroidWindow {
         private const val TAG_RUNTIME = "zed_android_runtime"
         private const val REQ_INSTALL_PERMISSION = 0xA4
         private const val REQ_POST_NOTIFICATIONS = 0xA5
+        private const val CLIPBOARD_IMAGE_TIMEOUT_MS = 2000L
+        private const val CLIPBOARD_IMAGE_MAX_BYTES = 32 * 1024 * 1024
         private const val PREFS = "zdroid"
         private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
         /// Matches `captured_pointer::PRIMARY_WINDOW_ID` on the Rust side.
         const val PRIMARY_WINDOW_ID: Long = 0
     }
 }
+
+/// An image from the clipboard, read by Rust through JNI.
+class ClipboardImage(@JvmField val mimeType: String, @JvmField val bytes: ByteArray)
