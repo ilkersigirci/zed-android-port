@@ -363,7 +363,7 @@ pub(crate) fn drain_ime_events(
 /// For terminals, this routes to `set_marked_text` — the text is
 /// shown in the composition overlay but NOT sent to the PTY. Only
 /// `commit_composition` sends to the PTY.
-fn set_composition(window_ptr: &AndroidWindowStatePtr, new_text: &str) {
+pub(crate) fn set_composition(window_ptr: &AndroidWindowStatePtr, new_text: &str) {
     let new_len = new_text.encode_utf16().count();
     let previous_start = window_ptr.state.borrow().ime_composition_start;
     let start = window_ptr.with_input_handler(|handler| {
@@ -413,7 +413,10 @@ fn set_composition(window_ptr: &AndroidWindowStatePtr, new_text: &str) {
 /// editors (because the text is in the buffer) and `None` for
 /// terminals (whose handler stubs `text_for_range`). That signal
 /// drives whether the finalization path needs an explicit commit.
-fn commit_composition(window_ptr: &AndroidWindowStatePtr, replacement_text: Option<&str>) {
+pub(crate) fn commit_composition(
+    window_ptr: &AndroidWindowStatePtr,
+    replacement_text: Option<&str>,
+) {
     let (previous_start, previous_text) = {
         let state = window_ptr.state.borrow();
         (
@@ -446,6 +449,14 @@ fn commit_composition(window_ptr: &AndroidWindowStatePtr, replacement_text: Opti
         log::debug!("ime: commit_composition dropped (no input handler)");
         return;
     }
+    let mut state = window_ptr.state.borrow_mut();
+    state.ime_composition_start = None;
+    state.ime_composition_text = None;
+}
+
+/// Stop tracking the composition and leave its text alone, for a key press whose
+/// text is about to replace it.
+pub(crate) fn forget_composition(window_ptr: &AndroidWindowStatePtr) {
     let mut state = window_ptr.state.borrow_mut();
     state.ime_composition_start = None;
     state.ime_composition_text = None;
@@ -583,6 +594,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             repeat_count,
         } => {
             if let Some(input) = crate::events::translate_extra_key_event(
+                window_ptr,
                 action,
                 VIRTUAL_KEYBOARD,
                 keycode,
@@ -614,6 +626,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             const KEYCODE_ENTER: u32 = 66;
             for key_action in [ACTION_DOWN, ACTION_UP] {
                 if let Some(input) = crate::events::translate_extra_key_event(
+                    window_ptr,
                     key_action,
                     VIRTUAL_KEYBOARD,
                     KEYCODE_ENTER,

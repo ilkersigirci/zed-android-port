@@ -7,13 +7,13 @@
 //! and any other leaves it named by its keycode on a US layout, so on a Turkish
 //! layout `ğ` types `ğ` and Ctrl+`ğ` is still `ctrl-[`.
 
-use std::cell::Cell;
-
 use android_activity::input::{KeyAction, KeyEvent, Keycode, MetaState};
 use anyhow::Result;
 use gpui::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, PlatformInput,
 };
+
+use crate::window::AndroidWindowStatePtr;
 
 /// `KeyCharacterMap.COMBINING_ACCENT`: the bit that marks a dead key.
 const COMBINING_ACCENT: u32 = 0x8000_0000;
@@ -25,11 +25,6 @@ const META_ALT_RIGHT_ON: u32 = 0x20;
 /// like are left out of a layout lookup: the map has no character for them,
 /// and a shortcut still needs to know what the key types.
 const META_CHARACTER_MASK: u32 = 0x01 | 0x40 | 0x80 | 0x10_0000 | 0x20_0000;
-
-thread_local! {
-    /// The accent a dead key left for the next key to combine with.
-    static PENDING_ACCENT: Cell<Option<char>> = const { Cell::new(None) };
-}
 
 /// What a key press types on the keyboard's layout. The default is what a key
 /// without a character types, or one whose layout couldn't be read, which then
@@ -50,13 +45,17 @@ struct Typed {
 /// Returns `None` when the event isn't translatable (e.g. `KeyAction::Multiple`,
 /// which is reserved for synthesized character sequences from soft keyboards we
 /// don't currently support).
-pub(crate) fn translate_key_event(event: &KeyEvent) -> Option<PlatformInput> {
+pub(crate) fn translate_key_event(
+    window: &AndroidWindowStatePtr,
+    event: &KeyEvent,
+) -> Option<PlatformInput> {
     let is_down = match event.action() {
         KeyAction::Down => true,
         KeyAction::Up => false,
         _ => return None,
     };
     translate_key(
+        window,
         is_down,
         event.device_id(),
         event.key_code(),
@@ -80,6 +79,7 @@ pub(crate) fn translate_key_event(event: &KeyEvent) -> Option<PlatformInput> {
 /// `meta_state_raw`: Android `KeyEvent.getMetaState()` (META_* bitfield).
 /// `repeat_count`: `KeyEvent.getRepeatCount()` for auto-repeat detection.
 pub(crate) fn translate_extra_key_event(
+    window: &AndroidWindowStatePtr,
     action: i32,
     device_id: i32,
     keycode_raw: u32,
@@ -92,6 +92,7 @@ pub(crate) fn translate_extra_key_event(
         _ => return None,
     };
     translate_key(
+        window,
         is_down,
         device_id,
         Keycode::from(keycode_raw),
@@ -101,6 +102,7 @@ pub(crate) fn translate_extra_key_event(
 }
 
 fn translate_key(
+    window: &AndroidWindowStatePtr,
     is_down: bool,
     device_id: i32,
     keycode: Keycode,
@@ -117,9 +119,17 @@ fn translate_key(
         return Some(modifiers_changed);
     }
 
-    // A dead key types nothing until the next key. Reporting no change, rather
-    // than no input, keeps Android's fallback handling from acting on it.
-    let Some(typed) = typed_by_layout(is_down, device_id, keycode, meta, &modifiers) else {
+    // A dead key only shows its accent until the next key. Reporting no change,
+    // rather than no input, keeps Android's fallback handling from acting on it.
+    let Some(typed) = typed_by_layout(
+        window,
+        is_down,
+        repeat_count,
+        device_id,
+        keycode,
+        meta,
+        &modifiers,
+    ) else {
         return Some(modifiers_changed);
     };
     let keystroke = build_keystroke(keycode, modifiers, typed);
@@ -137,22 +147,33 @@ fn translate_key(
 
 /// Looks up what a key types, combining it with a pending dead key on a press.
 /// Returns `None` for a press that only leaves an accent for the next key.
+///
+/// Until then the accent shows as composing text, as it does in Android's own
+/// text fields (`QwertyKeyListener`) and in Zed on Linux. A key that can't
+/// combine with it leaves it in the text, as both do.
 fn typed_by_layout(
+    window: &AndroidWindowStatePtr,
     is_down: bool,
+    repeat_count: i32,
     device_id: i32,
     code: Keycode,
     meta: MetaState,
     modifiers: &Modifiers,
 ) -> Option<Typed> {
     let is_shortcut = modifiers.control || modifiers.platform;
-    let accent = if is_down {
-        PENDING_ACCENT.take().filter(|_| !is_shortcut)
+    let is_named = named_key(code).is_some();
+    let pending = if is_down {
+        take_pending_accent(window)
     } else {
         None
     };
     // Named keys have no character to look up, apart from a space finishing a
     // dead key, which types the accent itself.
-    if named_key(code).is_some() && !(accent.is_some() && matches!(code, Keycode::Space)) {
+    let accent = pending.filter(|_| !is_shortcut && (!is_named || matches!(code, Keycode::Space)));
+    if pending.is_some() && accent.is_none() {
+        crate::ime::commit_composition(window, None);
+    }
+    if is_named && accent.is_none() {
         return Some(Typed::default());
     }
 
@@ -160,6 +181,9 @@ fn typed_by_layout(
         Ok(found) => found,
         Err(error) => {
             log::warn!("keyboard: couldn't read the keyboard's layout: {error:#}");
+            if accent.is_some() {
+                crate::ime::commit_composition(window, None);
+            }
             return Some(Typed::default());
         }
     };
@@ -168,27 +192,42 @@ fn typed_by_layout(
         if !is_down || is_shortcut {
             return Some(Typed::default());
         }
+        // Holding a dead key changes nothing, as in `QwertyKeyListener`.
+        if repeat_count > 0 {
+            window.state.borrow_mut().pending_accent = accent;
+            return None;
+        }
         let dead = char::from_u32(raw & !COMBINING_ACCENT).map(typable_accent);
         let Some(accent) = accent else {
-            PENDING_ACCENT.set(dead);
+            wait_for_next_key(window, dead);
             return None;
         };
         // Pressing a dead key twice types its accent, as
-        // `KeyCharacterMap.getDeadChar` has it. Another dead key finishes the
-        // first the same way and waits for its own turn.
-        if dead != Some(accent) {
-            PENDING_ACCENT.set(dead);
+        // `KeyCharacterMap.getDeadChar` has it.
+        if dead == Some(accent) {
+            crate::ime::forget_composition(window);
+            return Some(Typed {
+                character: Some(accent),
+                text: Some(accent.to_string()),
+                used_alt_gr,
+            });
         }
-        return Some(Typed {
-            character: Some(accent),
-            text: Some(accent.to_string()),
-            used_alt_gr,
-        });
+        // Another dead key leaves the first accent in the text and waits its turn.
+        crate::ime::commit_composition(window, None);
+        wait_for_next_key(window, dead);
+        return None;
     }
 
     let Some(character) = char::from_u32(raw).filter(|character| !character.is_control()) else {
+        if accent.is_some() {
+            crate::ime::commit_composition(window, None);
+        }
         return Some(Typed::default());
     };
+    // The key's text replaces the composing accent when gpui inserts it.
+    if accent.is_some() {
+        crate::ime::forget_composition(window);
+    }
     let text = match accent {
         Some(accent) => match dead_key_character(accent, character) {
             Ok(Some(combined)) => combined.to_string(),
@@ -210,6 +249,24 @@ fn typed_by_layout(
         text: Some(text),
         used_alt_gr,
     })
+}
+
+/// The accent waiting in `window` for the next key. Tapping elsewhere in the text
+/// abandons the composition, which leaves the accent there and types the next key
+/// on its own.
+fn take_pending_accent(window: &AndroidWindowStatePtr) -> Option<char> {
+    let mut state = window.state.borrow_mut();
+    let accent = state.pending_accent.take()?;
+    let composing = state.ime_composition_text.as_deref()?;
+    composing.chars().eq([accent]).then_some(accent)
+}
+
+fn wait_for_next_key(window: &AndroidWindowStatePtr, accent: Option<char>) {
+    let Some(accent) = accent else {
+        return;
+    };
+    crate::ime::set_composition(window, accent.encode_utf8(&mut [0; 4]));
+    window.state.borrow_mut().pending_accent = Some(accent);
 }
 
 /// `KeyCharacterMap` reports the dead keys for `^`, `~` and `` ` `` with spacing

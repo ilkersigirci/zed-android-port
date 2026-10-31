@@ -500,8 +500,9 @@ class MainActivity : GameActivity(), ZdroidWindow {
         }
     }
 
-    /// Zed's "Open in Default App": Android's usual choice of app, which can read
-    /// the file and write back to it.
+    /// Zed's "Open in Default App": Android's usual choice of app, which gets the
+    /// access Android's Files app gives one it opens a file in: reading, and
+    /// writing if the file can be written.
     @Suppress("unused") // called from Rust via JNI
     fun openWithSystem(path: String) {
         runOnUiThread { viewDocument(File(path)) }
@@ -516,12 +517,11 @@ class MainActivity : GameActivity(), ZdroidWindow {
         // The provider's type for a file it can't identify, which almost no app
         // accepts, so such a file gets Android's full list of apps instead.
         val type = contentResolver.getType(uri)?.takeUnless { it == "application/octet-stream" }
+        val write = if (file.canWrite()) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, type ?: "*/*")
             .addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION or write,
             )
         try {
             startActivity(intent)
@@ -550,7 +550,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
             path.startsWith(spelling)
         } ?: return null
         val document = File(folder, path.relativeTo(spelling).path)
-        return DocumentsContract.buildDocumentUri("com.zdroid.documents", document.path)
+        return DocumentsContract.buildDocumentUri(DOCUMENTS_AUTHORITY, document.path)
     }
 
     /// What a key types on its keyboard's layout, as `KeyCharacterMap.get`
@@ -596,7 +596,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
     @Suppress("unused") // called from Rust via JNI
     fun openHomeInFiles(): Boolean {
         val root = DocumentsContract.buildRootUri(
-            "com.zdroid.documents",
+            DOCUMENTS_AUTHORITY,
             File(filesDir, "home").absolutePath,
         )
         val intent = Intent(Intent.ACTION_VIEW)
@@ -934,6 +934,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         private const val TAG_RUNTIME = "zed_android_runtime"
         private const val REQ_INSTALL_PERMISSION = 0xA4
         private const val REQ_POST_NOTIFICATIONS = 0xA5
+        private const val DOCUMENTS_AUTHORITY = "com.zdroid.documents"
         private const val CLIPBOARD_IMAGE_TIMEOUT_MS = 2000L
         private const val CLIPBOARD_IMAGE_MAX_BYTES = 32 * 1024 * 1024
         private const val PREFS = "zdroid"

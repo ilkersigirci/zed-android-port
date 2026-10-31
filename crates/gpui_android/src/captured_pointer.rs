@@ -101,11 +101,12 @@ const TWO_FINGER_TAP_WINDOW: Duration = Duration::from_millis(300);
 const TWO_FINGER_TAP_MOTION_PX: f32 = 6.0;
 
 /// Tap-tap-drag window: time from the first tap's UP to the second
-/// tap's DOWN. Per libinput's tap state machine, 300ms is the
-/// implementation-defined timeout. If the second touch lands within
-/// this window AND near the first tap's position, it qualifies as the
-/// start of a tap-tap-drag rather than an unrelated second tap.
-const TAP_DRAG_WINDOW: Duration = Duration::from_millis(300);
+/// tap's DOWN. libinput's value; Android's touchpad library uses 150ms.
+/// If the second touch lands within this window AND near the first
+/// tap's position, it qualifies as the start of a tap-tap-drag rather
+/// than an unrelated second tap, such as moving the pointer on after a
+/// tap, which would otherwise pick up what was tapped.
+const TAP_DRAG_WINDOW: Duration = Duration::from_millis(180);
 
 /// "Hold finger 1, drag with finger 2" threshold. When the
 /// second finger lands and the first finger has already been on the
@@ -280,14 +281,8 @@ pub(crate) struct CapturedPointerState {
     /// POINTER_UP, which emits the matching MouseUp.
     drag_active: bool,
     /// Set to `Some` while in hold-and-drag mode (drag_active &&
-    /// engaged via two-finger entry). The visible cursor (Kotlin's)
-    /// stays pinned at finger 1's anchor during multi-touch, so we
-    /// can't read motion from `cursor` like we do for tap-tap-drag
-    /// (single-finger, where Kotlin moves the cursor). Instead we
-    /// accumulate finger 2's `AXIS_RELATIVE_X/Y` deltas into this
-    /// cursor and emit `MouseMove` at it so the editor's selection
-    /// grows in real time. `None` for tap-tap-drag drags (the regular
-    /// `cursor` is accurate there).
+    /// engaged via two-finger entry), with where the drag is now.
+    /// `None` for tap-tap-drag drags.
     hold_drag_cursor: Option<Point<Pixels>>,
     /// Last cursor position seen, in logical pixels. Kept so we can
     /// emit `MouseUp` / synthetic-tap events at the correct location
@@ -487,27 +482,22 @@ pub(crate) fn translate(
         }
         JAVA_ACTION_MOVE => {
             if event.pointer_count >= 2 || state.in_multi_touch {
-                if let Some(mut drag_cursor) = state.hold_drag_cursor {
+                if state.hold_drag_cursor.is_some() {
                     // Hold-and-drag in progress: route motion as
-                    // drag-MouseMove, NOT scroll. Sum of relative
-                    // deltas approximates finger 2's motion since
-                    // finger 1 is held in place; if finger 1 does
-                    // drift slightly the sum still tracks the
-                    // intended drag direction. Update the
-                    // internal drag cursor and emit
-                    // `MouseMove(Left held)` at the new position
-                    // so the editor selection grows in real time.
-                    let sum_rx: f32 = event.rxs.iter().sum();
-                    let sum_ry: f32 = event.rys.iter().sum();
-                    let dx = sum_rx / scale;
-                    let dy = sum_ry / scale;
-                    drag_cursor.x += px(dx);
-                    drag_cursor.y += px(dy);
-                    state.hold_drag_cursor = Some(drag_cursor);
-                    if dx != 0.0 || dy != 0.0 {
+                    // drag-MouseMove, NOT scroll. Kotlin moves the
+                    // cursor by both fingers' motion while this lasts,
+                    // and the drag follows it so it can't part from
+                    // the sprite.
+                    state.hold_drag_cursor = Some(cursor);
+                    let moved = event
+                        .rxs
+                        .iter()
+                        .chain(&event.rys)
+                        .any(|delta| *delta != 0.0);
+                    if moved {
                         state.last_motion_at = Some(Instant::now());
                         out.push(PlatformInput::MouseMove(MouseMoveEvent {
-                            position: drag_cursor,
+                            position: cursor,
                             pressed_button: state.button_held,
                             modifiers,
                         }));
@@ -956,13 +946,13 @@ mod tests {
         pad(&mut state, JAVA_ACTION_BUTTON_PRESS, 1, 0., 10.);
         assert!(pad(&mut state, JAVA_ACTION_POINTER_DOWN, 2, 0., 10.).is_empty());
         assert!(matches!(
-            pad(&mut state, JAVA_ACTION_MOVE, 2, 20., 10.).as_slice(),
+            pad(&mut state, JAVA_ACTION_MOVE, 2, 20., 90.).as_slice(),
             [PlatformInput::MouseMove(moved)]
-                if moved.pressed_button == Some(MouseButton::Left) && moved.position.x == px(50.)
+                if moved.pressed_button == Some(MouseButton::Left) && moved.position.x == px(90.)
         ));
         assert!(matches!(
-            pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 2, 0., 10.).as_slice(),
-            [PlatformInput::MouseUp(up)] if up.position.x == px(50.)
+            pad(&mut state, JAVA_ACTION_BUTTON_RELEASE, 2, 0., 90.).as_slice(),
+            [PlatformInput::MouseUp(up)] if up.position.x == px(90.)
         ));
         assert!(!state.drag_active);
     }

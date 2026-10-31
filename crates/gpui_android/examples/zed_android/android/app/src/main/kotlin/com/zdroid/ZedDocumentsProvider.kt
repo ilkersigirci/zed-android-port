@@ -54,6 +54,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
         cursor.newRow().apply {
             add(DocumentsContract.Root.COLUMN_ROOT_ID, baseDir.absolutePath)
             add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, baseDir.absolutePath)
+            add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ic_launcher)
             add(DocumentsContract.Root.COLUMN_TITLE, "Zdroid")
             add(DocumentsContract.Root.COLUMN_SUMMARY, "Home folder")
             add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*")
@@ -311,6 +312,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
             DocumentsContract.Root.COLUMN_ROOT_ID,
             DocumentsContract.Root.COLUMN_MIME_TYPES,
             DocumentsContract.Root.COLUMN_FLAGS,
+            DocumentsContract.Root.COLUMN_ICON,
             DocumentsContract.Root.COLUMN_TITLE,
             DocumentsContract.Root.COLUMN_SUMMARY,
             DocumentsContract.Root.COLUMN_DOCUMENT_ID,
