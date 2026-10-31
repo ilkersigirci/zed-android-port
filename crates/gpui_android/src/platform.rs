@@ -1893,7 +1893,15 @@ impl Platform for AndroidPlatform {
         let (result, receiver) = oneshot::channel();
         self.foreground_executor()
             .spawn(async move {
-                result.send(Ok(paths.await.ok().flatten())).ok();
+                // The picker's "open this directory" answers `folder/./`, which
+                // callers would keep in the paths they save and show.
+                let paths = paths.await.ok().flatten().map(|paths| {
+                    paths
+                        .iter()
+                        .map(|path| path.components().collect::<PathBuf>())
+                        .collect()
+                });
+                result.send(Ok(paths)).ok();
             })
             .detach();
         receiver

@@ -44,7 +44,7 @@ Since 0.9.17 the app also runs Zed's model providers (`copilot_chat::init`, `lan
 
 Still unverified on a device: streamed responses and tool calls through an OpenAI-compatible endpoint, inline edits, API keys surviving a restart (Android Keystore), Copilot Chat's GitHub sign-in, and local MCP servers in the Ubuntu runtime (including the sandbox fallback), as opposed to servers on an SSH host. Copilot edit prediction is not initialized. Android's API-key card in a native agent thread has no dismiss button (Zed's card has one through `ZedAiOnboarding`), so it stays until a provider is configured.
 
-**External agents under the Ubuntu runtime (0.10.0).** Claude Agent and Codex come from the ACP registry as npm packages, which Zed installs with its managed Node into `external_agents/registry/npx/` under its data directory (`LocalRegistryNpxAgent` in `agent_server_store.rs`). The managed Node is a Linux build that runs in the runtime, so npm picks the glibc `linux-arm64` builds of their CLIs, which read the runtime's `/etc/resolv.conf` and CA certificates; Bootstrap needed `CLAUDE_CODE_EXECUTABLE`, `CODEX_PATH` and `SSL_CERT_FILE` pointing at patched global installs. Not yet tried on a device under the runtime.
+**External agents under the Ubuntu runtime (0.10.0).** Claude Agent and Codex come from the ACP registry as npm packages, which Zed installs with its managed Node into `external_agents/registry/npx/` under its data directory (`LocalRegistryNpxAgent` in `agent_server_store.rs`). The managed Node is a Linux build that runs in the runtime, so npm picks the glibc `linux-arm64` builds of their CLIs, which read the runtime's `/etc/resolv.conf` and CA certificates; Bootstrap needed `CLAUDE_CODE_EXECUTABLE`, `CODEX_PATH` and `SSL_CERT_FILE` pointing at patched global installs. Codex answers in a local project on the tablet (seen on 2026-10-31), though its command sandbox doesn't start there, as the release caveats say.
 
 
 ## Scrolling runs at about 64 fps on the 120 Hz panel
@@ -70,6 +70,21 @@ The rest of 0.10.0's device checks passed on the tablet on 2026-10-30. These two
 - Speed against 0.9.23, which ran its tools natively, while 0.10.0's engine translates every path system call: rust-analyzer's first diagnostics and go to definition in a Rust project under `~/projects`, `cargo build`, and `git status` in a large repository, timed on the same project with both versions.
 
 ## Open from the final pass, 2026-10-31
+
+Seen on the tablet while testing 0.11.0, none of them caused by that release:
+
+- **A finger often can't press the status bar's buttons.** In fullscreen with gesture navigation on One UI, Android's mandatory gesture area is the bottom 38 px and the status bar lies inside it. Logcat shows adb's taps there, and some of the owner's finger taps, reaching One UI's `TaskbarWindow` rather than Zdroid; a trackpad still reaches the buttons. The system bars have been hidden the same way since before this release, though 0.10.1 wasn't compared. Laying gpui out above `mandatorySystemGestures` would fix it, at the cost of that strip.
+- **A new window sits 45 px too low outside DeX.** Ctrl+Shift+N asks for the whole screen and One UI's freeform mode places it at `[0,45][2960,1893]`, which hides its status bar. Dragging or maximizing it from the caption is the way out. `compute_launch_bounds` could leave room for the caption.
+- **Alt reads "option" in shortcut hints.** `PlatformStyle::platform()` in `crates/ui` treats every OS it doesn't know as Mac. Changing it needs a look at its other uses.
+- **Zdroid has no icon in Android's file picker.** `ZedDocumentsProvider` sets no `COLUMN_ICON` on its root.
+- **Vim logs `Didn't find an action named "collab_panel::ToggleFocus"`.** Harmless: Android doesn't register that action.
+
+Not checked on the tablet:
+
+- **Choose from Local Folders in the agent archive.** It only appears for an archived thread with no folder. None existed, and an empty window's agent panel has no message box to start one, so the keep-alive in `open_local_folder` has only been compiled.
+- **The thermal frame cap.** `cmd thermalservice override-status 3` took effect, but `dumpsys SurfaceFlinger --latency` returned no frames for Zdroid's layer in that session, so the cap wasn't measured.
+- **The in-app update's install.** The updater compares `versionName`, and the tablet already has 0.11.0 from the pull request's APK, so it first runs for real at the next release. Installing that release by hand keeps the data if it fails.
+- **Swiping the app away during first-launch extraction.** It needs a clean install, which deletes the home folder, so try it on the next one.
 
 Considered and left as they are:
 
