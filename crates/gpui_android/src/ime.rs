@@ -11,8 +11,8 @@
 //! `AndroidWindowState` (and its `PlatformInputHandler`) live in
 //! `Rc<RefCell<_>>` on the game thread — not Send. So we marshal
 //! every IME event onto an mpsc channel and the game thread drains it
-//! each iteration of the main loop (same pattern as `multi_window`
-//! and `captured_pointer`). Show/hide IME goes the other direction —
+//! each iteration of the main loop (same pattern as `multi_window`).
+//! Show/hide IME goes the other direction —
 //! Rust → Kotlin — via direct JNI calls on the Activity's `requestIme`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,14 +56,6 @@ pub(crate) fn on_screen_keyboard_enabled() -> bool {
     ON_SCREEN_KEYBOARD_ENABLED.load(Ordering::Acquire)
 }
 
-/// Mirrors the effective trackpad-mode state (`trackpad_mode` master
-/// AND `trackpad_mode_active` runtime). Written by the same
-/// SettingsStore observer in `zed_android::lib::main`. Read by the
-/// touch state machine (`crate::touch`) to branch between
-/// direct-touch and virtual-trackpad behaviors. Read by platform
-/// reconcile to drive cursor-sprite visibility on the Kotlin side.
-pub(crate) static TRACKPAD_MODE_ENABLED: AtomicBool = AtomicBool::new(false);
-
 /// Mirrors `android_input.programming_extras_row`. Written by the
 /// SettingsStore observer in `zed_android::lib::main`, pushed to
 /// Kotlin via `Activity.setProgrammingExtrasRowEnabled` on each
@@ -75,17 +67,9 @@ pub(crate) static TRACKPAD_MODE_ENABLED: AtomicBool = AtomicBool::new(false);
 /// "row inflated then torn down".
 pub(crate) static EXTRAS_ROW_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn trackpad_mode_enabled() -> bool {
-    TRACKPAD_MODE_ENABLED.load(Ordering::Acquire)
-}
-
 /// Mirrors `android_input.invert_scroll`. Written by the SettingsStore
-/// observer in `zed_android::lib::main`. Read by the captured-pointer
-/// synthesizer (`crate::captured_pointer`: trackpad two-finger scroll +
-/// mouse wheel) and the virtual-trackpad SM (`crate::touch`). When set,
-/// those scroll deltas are negated so scrolling matches the user's
-/// platform convention (macOS-style natural vs traditional). Cursor
-/// movement and direct-touch finger scrolling are never inverted.
+/// observer in `zed_android::lib::main`. When set, the mouse wheel's scroll
+/// deltas are negated. A trackpad's direction is Android's setting.
 pub(crate) static INVERT_SCROLL: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn invert_scroll_enabled() -> bool {

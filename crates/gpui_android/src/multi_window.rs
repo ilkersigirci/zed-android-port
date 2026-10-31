@@ -35,10 +35,13 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use android_activity::AndroidApp;
+use android_activity::input::{MetaState, MotionAction, Source, ToolType};
 use anyhow::{Context as _, Result, bail};
 use futures::channel::{mpsc, oneshot};
 use jni::objects::{GlobalRef, JFloatArray, JIntArray, JObject, JValue};
 use ndk::native_window::NativeWindow;
+
+use crate::events::{Motion, MotionPointer};
 
 /// Hard cap on how long `create_extra_window_blocking` will wait for the
 /// Activity's `surfaceCreated` callback. Cold Activity start in DeX desktop
@@ -83,19 +86,7 @@ pub(crate) enum ExtraWindowEvent {
     /// Touch / pointer event on the extra `SurfaceView`. Raw fields from the
     /// Java `MotionEvent`; the platform translates them on the game thread to
     /// avoid touching the JNI env from a non-UI thread.
-    Motion {
-        window_id: u64,
-        action_masked: i32,
-        action_index: i32,
-        meta_state: i32,
-        /// `MotionEvent.getFlags()`.
-        flags: i32,
-        vscroll: f32,
-        hscroll: f32,
-        positions: Vec<(f32, f32, i32)>,
-        /// `MotionEvent.getToolType` for each pointer in `positions`.
-        tool_types: Vec<i32>,
-    },
+    Motion { window_id: u64, motion: Motion },
     /// Hardware key event on the extra window. Raw fields from the Java
     /// `KeyEvent`; same off-thread translation policy as `Motion`. Without
     /// this routing the Editor in any extra window (Settings is the
@@ -167,8 +158,8 @@ fn refs_table() -> std::sync::MutexGuard<'static, Option<HashMap<u64, GlobalRef>
 /// Clone the `GlobalRef` for the `ExtraWindowActivity` with this
 /// `window_id`. Returns `None` if the Activity isn't registered
 /// (already destroyed, or never created). Callers that need to call
-/// Kotlin methods on a specific extra Activity (cursor sprite for
-/// trackpad mode, per-window IME mode, etc.) go through this.
+/// Kotlin methods on a specific extra Activity (per-window IME mode,
+/// etc.) go through this.
 pub(crate) fn extra_activity_for(window_id: u64) -> Option<GlobalRef> {
     refs_table()
         .as_ref()
@@ -552,6 +543,8 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     window_id: i64,
     action_masked: i32,
     action_index: i32,
+    source: i32,
+    button_state: i32,
     meta_state: i32,
     flags: i32,
     vscroll: f32,
@@ -565,8 +558,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     log::debug!(
         "multi_window: nativeOnExtraTouchEvent windowId={window_id} action={action_masked}"
     );
-    let (positions, tool_types) = match read_pointers(&mut env, &xs, &ys, &pointer_ids, &tool_types)
-    {
+    let pointers = match read_pointers(&mut env, &xs, &ys, &pointer_ids, &tool_types) {
         Ok(pointers) => pointers,
         Err(err) => {
             log::warn!("multi_window: failed to read pointers: {err:#}");
@@ -575,14 +567,17 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     };
     dispatch_event(ExtraWindowEvent::Motion {
         window_id,
-        action_masked,
-        action_index,
-        meta_state,
-        flags,
-        vscroll,
-        hscroll,
-        positions,
-        tool_types,
+        motion: Motion {
+            action: MotionAction::from(action_masked as u32),
+            action_index: action_index.max(0) as usize,
+            source: Source::from(source as u32),
+            meta_state: MetaState(meta_state as u32),
+            button_state: button_state as u32,
+            canceled: flags as u32 & crate::events::FLAG_CANCELED != 0,
+            vscroll,
+            hscroll,
+            pointers,
+        },
     });
 }
 
@@ -619,17 +614,16 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraKeyEvent<'local
     });
 }
 
-/// Reads the pointers' positions and ids, and separately their tool types.
 fn read_pointers(
     env: &mut jni::JNIEnv,
     xs: &JFloatArray,
     ys: &JFloatArray,
     pointer_ids: &JIntArray,
     tool_types: &JIntArray,
-) -> Result<(Vec<(f32, f32, i32)>, Vec<i32>)> {
+) -> Result<Vec<MotionPointer>> {
     let count = env.get_array_length(xs).context("xs length")? as usize;
     if count == 0 {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
     let mut x_buf = vec![0f32; count];
     let mut y_buf = vec![0f32; count];
@@ -643,11 +637,15 @@ fn read_pointers(
         .context("pointer_ids region")?;
     env.get_int_array_region(tool_types, 0, &mut tool_type_buf)
         .context("tool_types region")?;
-    let positions = x_buf
+    Ok(x_buf
         .into_iter()
         .zip(y_buf)
         .zip(id_buf)
-        .map(|((x, y), id)| (x, y, id))
-        .collect::<Vec<_>>();
-    Ok((positions, tool_type_buf))
+        .zip(tool_type_buf)
+        .map(|(((x, y), id), tool)| MotionPointer {
+            id,
+            position: gpui::point(gpui::px(x), gpui::px(y)),
+            tool: ToolType::from(tool as u32),
+        })
+        .collect())
 }

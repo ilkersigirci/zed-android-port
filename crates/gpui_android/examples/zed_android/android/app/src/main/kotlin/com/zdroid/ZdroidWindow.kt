@@ -1,14 +1,14 @@
 package com.zdroid
 
 import android.app.Activity
+import android.view.PointerIcon
 import android.view.WindowManager
 
 /// What `gpui_android` calls over JNI on the Activity hosting a window, the
-/// main one or an extra one. Both have the same keyboard and pointer behavior
-/// through [WindowIme] and [WindowPointer].
+/// main one or an extra one. Both have the same keyboard behavior through
+/// [WindowIme].
 interface ZdroidWindow {
     val ime: WindowIme
-    val pointer: WindowPointer
 
     @Suppress("unused")
     fun requestIme(show: Boolean) = ime.request(show)
@@ -32,13 +32,12 @@ interface ZdroidWindow {
     fun setSoftKeyboardEnabled(enabled: Boolean) = ime.setSoftKeyboardEnabled(enabled)
 
     @Suppress("unused")
-    fun setCursorStyle(style: Int) = pointer.setCursorStyle(style)
-
-    @Suppress("unused")
-    fun setTrackpadModeActive(active: Boolean) = pointer.setTrackpadModeActive(active)
-
-    @Suppress("unused")
-    fun setTrackpadCursorPosition(x: Float, y: Float) = pointer.setTrackpadCursorPosition(x, y)
+    fun setCursorStyle(style: Int) {
+        val activity = this as Activity
+        activity.runOnUiThread {
+            activity.window.decorView.pointerIcon = PointerIcon.getSystemIcon(activity, style)
+        }
+    }
 
     /// Zed's "prevent idle sleep", requested while an agent works.
     @Suppress("unused")

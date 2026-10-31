@@ -6,7 +6,7 @@ Remaining Android feature gaps, device reports and unfixed review findings.
 
 External user tried to file these and was blocked by upstream Zed's `blank_issues_enabled: false` + Discord-redirect contact_links (fixed in `244f29a455`). Logging here so they don't get lost while the user re-files via the new templates.
 
-- **Mouse scroll direction reversed**: Samsung One UI + Bluetooth mouse. Scroll works correctly everywhere else on the device but is inverted in Zdroid. Likely a sign flip in `gpui_android`'s `MotionEvent` → scroll-delta translation. Check the wheel-axis path specifically (touch-pad two-finger scroll may differ); One UI may report `AXIS_VSCROLL` with a sign that mainline Zed doesn't compensate for. The uncaptured mouse-wheel path now passes vertical deltas through; verify captured and uncaptured scrolling on One UI before treating the original device report as resolved.
+- **Mouse scroll direction reversed**: Samsung One UI + Bluetooth mouse. Scroll works correctly everywhere else on the device but is inverted in Zdroid. Likely a sign flip in `gpui_android`'s `MotionEvent` → scroll-delta translation. Check the wheel-axis path specifically (touch-pad two-finger scroll may differ); One UI may report `AXIS_VSCROLL` with a sign that mainline Zed doesn't compensate for. The uncaptured mouse-wheel path now passes vertical deltas through; verify it on One UI before treating the original device report as resolved.
 - ~~**Vim mode broken**~~ — **fixed in 29b29ddd63** (key events now route from `ExtraWindowActivity` to gpui via `nativeOnExtraKeyEvent` JNI bridge; the root cause was that any extra window's `dispatchKeyEvent` was never forwarded so `PlatformInput::KeyDown` never fired). Vim and any other editor in a non-Main window now accepts typing.
 - ~~**Settings searchbar typing broken**~~ — **fixed in 29b29ddd63** (same key-routing fix, plus a tap-to-focus wrapper on the search bar with `stop_propagation` so taps don't bubble to `SettingsWindow`'s focus tracker which was immediately blurring the bar).
 
@@ -58,7 +58,7 @@ Not checked on the tablet:
 
 Considered and left as they are:
 
-- **A second mouse button during a press acts as the first.** Under capture `ACTION_BUTTON_PRESS` reads `button_from_state`, which prefers the primary button, so a right press while the left is held sends a second left mouse down, and either release ends the one held button. `MotionEvent.getActionButton` says which button changed. Fixing it also needs a set of held buttons in `CapturedPointerState`.
+- **A second mouse button pressed while one is held does nothing.** Only `ACTION_DOWN` and `ACTION_UP` press and release a button in `events/mouse.rs`, which is all a chord would need `ACTION_BUTTON_PRESS` and `MotionEvent.getActionButton` for. Nothing in Zed uses chords.
 - **A long press doesn't vibrate.** Android's views call `performHapticFeedback(LONG_PRESS)` when a long press does something, so a drag starting from one would too. gpui has no call for it, and the reference tablet reports no vibrator capabilities and has touch feedback off, so it couldn't be felt or checked there.
 - **Paste in the terminal with an image on the clipboard sends Ctrl+V (since 0.12.0, from Zed's code).** Zed does this so that terminal agents can read the system clipboard themselves, which they can't on Android. In a shell, it makes the next key literal. Changing it would need an Android-only edit to `terminal_view.rs`.
 - **Zed's path picker answers every path prompt.** It takes one path, doesn't filter by file or folder and doesn't show the caller's title, so the agent's Add Images attaches one image per pick and Clone Repository's picker doesn't say what it's for. A Download from a project on a Windows host also gets that host's path rules in a picker for this device's paths (read in the code, not seen). Fixing these means changing Zed's `OpenPathDelegate`. See `crates/gpui_android/docs/workarounds/path-prompts-use-zed-picker.md`.
@@ -92,31 +92,21 @@ An audit of `crates/gpui_android`'s input code found 22 problems. These are the 
 
 **Mouse and trackpad**
 
-3. **Captured two-finger tap bounds (fixed in code 2026-10-28; device check pending).** Right-click now requires exactly two fingers, completion within `TWO_FINGER_TAP_WINDOW`, and cumulative movement below the tap threshold. Verify quick taps still right-click and slow two-finger scrolls do not.
-4. **Gpui is never told when the pointer leaves a window.** `HOVER_EXIT` is dropped (`events.rs`), the hover-status callback is stored but never called, and `is_hovered` returns false, so hover highlights can stay after the pointer leaves.
+4. **Gpui is never told when the pointer leaves a window.** Android sends `HOVER_EXIT` before every press too, so it doesn't mean that. The hover-status callback is stored but never called, and `is_hovered` returns false, so hover highlights can stay after the pointer leaves.
 5. **S Pen buttons aren't mapped.** `button_from_state` ignores the stylus button bits, so the pen's side button doesn't right-click.
 
 **Touch**
 
-Fingers go to gpui's touch gestures since step 2 of the touch plan below, and step 4 deleted `touch.rs`'s finger state machine, so 6 and 7 are fixed and the finger long press in 8 fires from a timer. A long press outside the editor and the terminal, which claim it, still ends as a tap when the finger lifts.
+Fingers go to gpui's touch gestures since step 2 of the touch plan below, and step 4 deleted `touch.rs`'s finger state machine, so 6 and 7 are fixed. A long press outside the editor and the terminal, which claim it, still ends as a tap when the finger lifts.
 
 6. ~~**Starting a scroll or long press can click.** Touch-down sends a mouse down at once, and the gesture ends with a `click_count: 0` mouse up, which gpui still treats as a click. Starting a scroll on a project-panel file can open it, and every scroll moves the editor's caret to where the finger landed. Fix: send the mouse down only once a tap is decided, as `TrackpadTouchState` already does.~~ Fixed: gpui's recognizer sends the mouse down only once a tap is decided.
 7. ~~**A two-finger swipe right-clicks.** `touch.rs` fires the right-click as soon as a second finger lands within 800 ms and 250 px, so most two-finger swipes open the context menu. Fix: fire on lift if the fingers barely moved.~~ Fixed: `TouchFeed` fires on lift if the fingers barely moved.
-8. **Trackpad-mode hold-to-drag fires only on the next move event**: a perfectly still finger never promotes to hold-to-drag. Losing pointer capture isn't reported to Rust either. (The finger long press, which had the same problem, now fires from gpui's timer.)
-
-**Extra windows (Settings and other pop-ups)**
-
-9. **Mouse and stylus input is treated as a finger** when not captured. `ExtraWindowActivity.forwardTouchEvent` sends no source, and `translate_extra_motion_event` sends every touch action to gpui's touch recognizer through `TouchFeed`, so a mouse click there is a tap and a mouse drag scrolls.
 
 **Keyboard and IME**
 
 11. **The IME doesn't know where the caret is.** `update_ime_position` is empty and `ZdroidInputConnection` doesn't implement `requestCursorUpdates`, so floating keyboards and handwriting input can't position themselves.
 12. **InputConnection contract gaps:** `setSelection`, `setComposingRegion` and `performContextMenuAction` aren't implemented, and `newCursorPosition` is ignored.
 13. **The keyboard still hides by polling** `input_handler.is_some()`, with a `text_for_range(0..1)` probe and a selection poll, instead of reacting to gpui's `text_input_state_changed`. (Text fields now show it through `request_virtual_keyboard`; see `crates/gpui_android/docs/ahead-of-upstream.md`.)
-**Code health**
-
-15. Unchecked indexing in `touch.rs`; stale comments across `events/*.rs`, `touch.rs` and `ime.rs`; dead `Finger` arms in `events/source.rs`.
-16. Per-event work on the trackpad path: two relative-coordinate arrays per captured event, and a JNI call plus `runOnUiThread` per trackpad-mode move.
 
 ## Post-2026-08 upstream-merge follow-ups
 
@@ -124,7 +114,7 @@ The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parall
 
 **Converge onto upstream's official mobile API surface.** Done (2026-10): the soft keyboard uses `show_soft_keyboard`/`hide_soft_keyboard` and `text_input_state_changed` (which also drives vim's key-vs-text routing), the platform reports `on_app_lifecycle`, `on_memory_warning` and window visibility, the keyboard and trackpad buttons are app-owned status bar items, and the windows implement `insets()`/`on_insets_changed`: each Activity pushes its system-bar, display-cutout and keyboard insets, every frame while the keyboard slides, and gpui lays out above the keyboard. Touch is done too (below). Left: `set_back_handler` and `set_text_input_configuration`, which wait on upstream, since nothing in Zed uses them yet; `crates/gpui_android/docs/ahead-of-upstream.md` says what to grep for at each sync. Touch was the big one; its plan, one pull request per step, each tested on the tablet:
 
-1. gpui_android sends `PlatformInput::Touch` for finger input in the main and extra windows instead of `touch.rs`'s synthesized mouse and scroll events. gpui's recognizer (`crates/gpui/src/gestures.rs`) then provides taps with tap counts, pans with momentum, long presses, touch drags and `Window::last_input_was_touch`. The virtual trackpad (`TrackpadTouchState`) and the captured pointer stay as they are.
+1. gpui_android sends `PlatformInput::Touch` for finger input in the main and extra windows instead of `touch.rs`'s synthesized mouse and scroll events. gpui's recognizer (`crates/gpui/src/gestures.rs`) then provides taps with tap counts, pans with momentum, long presses, touch drags and `Window::last_input_was_touch`.
 2. Upstream doesn't claim touch drags anywhere yet, so add claims (`prevent_default` on a started `TouchDragEvent`) to the scrollbar thumb, the editor scrollbar, the pane splitter and the dock resize handle, replacing the fork's `set_drag_active` calls. Add a `LongPressEvent` claim to the editor for word selection with drag-to-extend, and move the terminal's long-press menu onto it. These are small, platform-neutral edits that could go upstream.
 3. gpui's recognizer has no two-finger tap: detect it in gpui_android before forwarding (cancel the touches, then send a secondary click).
 4. Remove `set_drag_active`, `last_input_was_touch` and `last_platform_input_was_touch` from gpui and the finger state machine from `touch.rs`.

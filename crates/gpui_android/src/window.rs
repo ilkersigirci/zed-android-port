@@ -131,22 +131,9 @@ pub(crate) struct AndroidWindowState {
     /// at construction time (both primary and extras carry it; primary just
     /// never reaches the Drop branch that uses it).
     pub(crate) android_app: AndroidApp,
-    /// Per-window click + button-state tracker (shared by mouse and
-    /// touch dispatchers). See `events/click_track.rs`. Lives here as
-    /// a field so each window has its own click run + non-primary
-    /// held-button latch — a click in window A doesn't bleed into
-    /// window B's double-click run.
-    pub(crate) clicks: crate::events::click_track::ClickTrackState,
-    /// Per-window captured-pointer (trackpad) SM state. See
-    /// `captured_pointer.rs`. Hold-drag timers, drag-lock state,
-    /// tap-tap-drag pending flags, etc. all live here so a gesture in
-    /// one window doesn't leak into another's.
-    pub(crate) captured: crate::captured_pointer::CapturedPointerState,
-    /// Trackpad-mode counterpart to `touch_feed`. Receives the same
-    /// `TouchEvent` stream when `android_input.trackpad_mode` is on
-    /// (the dispatcher branches via the
-    /// `ime::TRACKPAD_MODE_ENABLED` atomic).
-    pub(crate) trackpad_touch: crate::touch::TrackpadTouchState,
+    /// The held button and the run of clicks, per window so that a click in
+    /// one window doesn't continue a double click in another.
+    pub(crate) mouse: crate::events::mouse::MouseState,
     /// Feeds finger gestures to gpui's own touch gesture recognizer. Each
     /// window's touchscreen events are isolated.
     pub(crate) touch_feed: crate::touch::TouchFeed,
@@ -685,9 +672,7 @@ impl AndroidWindow {
             modifiers: Modifiers::default(),
             capslock: Capslock::default(),
             android_app,
-            clicks: crate::events::click_track::ClickTrackState::default(),
-            captured: crate::captured_pointer::CapturedPointerState::default(),
-            trackpad_touch: crate::touch::TrackpadTouchState::default(),
+            mouse: crate::events::mouse::MouseState::default(),
             touch_feed: crate::touch::TouchFeed::new(touch_slop),
             extra_window_id: None,
             ime_composition_start: None,

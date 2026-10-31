@@ -55,8 +55,8 @@ which drops the panel to 60 or 30 Hz soon after an app stops rendering.
 Input that changes nothing, such as moving the pointer over text, starts
 no frames.
 
-Java threads queue work for the run loop: IME events, extra-window events
-and captured-trackpad events, plus the soft keyboard's visibility. They
+Java threads queue work for the run loop: IME events and extra-window events,
+plus the soft keyboard's visibility. They
 wake the loop with `wake_run_loop` after queueing. The old callback picked
 them up within a vsync. The run loop sleeps without a timeout, so without
 the wake an idle loop wouldn't see them until something else woke it.

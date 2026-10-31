@@ -159,30 +159,6 @@ pub(crate) fn frame_presented() {
     LAST_PRESENT_AT.set(Some(Instant::now()));
 }
 
-/// Dispatches the next step of a window's trackpad glide
-/// (`captured_pointer`), and asks for another vsync while it runs. A hidden
-/// window's glide stops.
-fn advance_trackpad_glide(window_ptr: &crate::window::AndroidWindowStatePtr) {
-    let visible = window_ptr.is_visible();
-    let (step, gliding) = {
-        let mut state = window_ptr.state.borrow_mut();
-        let Some(fling) = state.captured.fling.as_mut() else {
-            return;
-        };
-        if !visible {
-            fling.stop();
-            return;
-        }
-        (fling.tick(), fling.is_gliding())
-    };
-    if let Some(event) = step {
-        window_ptr.handle_input(PlatformInput::Scroll(event));
-    }
-    if gliding {
-        request_frame_callback();
-    }
-}
-
 /// Requests the first frame on the calling thread, which must have a Looper
 /// attached (android-activity's main thread does).
 fn install_choreographer_callback() {
@@ -229,12 +205,6 @@ pub(crate) struct AndroidCommon {
     /// from `AndroidCommon::new` until the loop terminates.
     pub(crate) extra_event_rx:
         Option<futures::channel::mpsc::UnboundedReceiver<crate::multi_window::ExtraWindowEvent>>,
-    /// Receiver side of the JNI → game-thread channel for captured
-    /// pointer events. Populated when `MainActivity` activates pointer
-    /// capture; each captured `MotionEvent` is marshaled across JNI
-    /// and lands here for `translate` + dispatch.
-    pub(crate) captured_pointer_rx:
-        Option<futures::channel::mpsc::UnboundedReceiver<crate::captured_pointer::CapturedEvent>>,
     /// Receiver side of the JNI → game-thread channel for IME events.
     /// Each event carries the originating window id (0 = primary
     /// `MainActivity`, otherwise the `ExtraWindowActivity` window id
@@ -255,7 +225,6 @@ pub(crate) struct AndroidCommon {
     /// The `PHYSICAL_KEYBOARD_BLOCKS_IME` value last acted on.
     pub(crate) last_physical_keyboard_blocks_ime: bool,
     /// The settings last pushed to the Activities; see `tick_window_settings`.
-    pub(crate) last_trackpad_mode_enabled: Option<bool>,
     pub(crate) last_extras_row_enabled: Option<bool>,
     pub(crate) last_soft_keyboard_setting: Option<bool>,
     /// Main window events that arrived while an extra window was opening,
@@ -325,11 +294,9 @@ impl AndroidCommon {
             window: None,
             extra_windows: std::collections::HashMap::new(),
             extra_event_rx: Some(crate::multi_window::init_event_channel()),
-            captured_pointer_rx: Some(crate::captured_pointer::init_event_channel()),
             ime_event_rx: Some(crate::ime::init_event_channel()),
             last_soft_keyboard_visible: false,
             last_physical_keyboard_blocks_ime: false,
-            last_trackpad_mode_enabled: None,
             last_extras_row_enabled: None,
             last_soft_keyboard_setting: None,
             deferred_primary_resync: false,
@@ -661,13 +628,9 @@ impl AndroidPlatform {
     /// its Activity refuses the keyboard's text connection, and typing falls
     /// back to plain key presses.
     fn push_settings_to_new_window(&self, window_id: u64) {
-        let (keep_screen_on, soft_keyboard_setting, trackpad_mode) = {
+        let (keep_screen_on, soft_keyboard_setting) = {
             let common = self.common.borrow();
-            (
-                common.keep_screen_on,
-                common.last_soft_keyboard_setting,
-                common.last_trackpad_mode_enabled,
-            )
+            (common.keep_screen_on, common.last_soft_keyboard_setting)
         };
         let window_id = Some(window_id);
         let push = |method: &str, signature: &str, argument: jni::objects::JValue<'_, '_>| {
@@ -687,9 +650,6 @@ impl AndroidPlatform {
         }
         if let Some(enabled) = soft_keyboard_setting {
             push("setSoftKeyboardEnabled", "(Z)V", enabled.into());
-        }
-        if trackpad_mode == Some(true) {
-            push("setTrackpadModeActive", "(Z)V", true.into());
         }
         if let Some(icon_type) = crate::cursor::last_pushed_icon_type() {
             push("setCursorStyle", "(I)V", icon_type.into());
@@ -744,9 +704,7 @@ impl AndroidPlatform {
             )
         };
         if let Some(primary) = primary {
-            primary.set_insets(crate::insets::reported(
-                crate::captured_pointer::PRIMARY_WINDOW_ID,
-            ));
+            primary.set_insets(crate::insets::reported(crate::insets::PRIMARY_WINDOW_ID));
         }
         for (window_id, window) in extras {
             window.set_insets(crate::insets::reported(window_id));
@@ -871,17 +829,7 @@ impl AndroidPlatform {
                     }
                     crate::multi_window::unmark_window_registered(window_id);
                 }
-                ExtraWindowEvent::Motion {
-                    window_id,
-                    action_masked,
-                    action_index,
-                    meta_state,
-                    flags,
-                    vscroll,
-                    hscroll,
-                    positions,
-                    tool_types,
-                } => {
+                ExtraWindowEvent::Motion { window_id, motion } => {
                     let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
                     let Some(state) = entry else {
                         log::warn!(
@@ -889,23 +837,12 @@ impl AndroidPlatform {
                         );
                         continue;
                     };
-                    let inputs = {
+                    let translated = {
                         let mut window_state = state.state.borrow_mut();
                         let scale = window_state.scale_factor;
-                        crate::events::translate_extra_motion_event(
-                            action_masked,
-                            action_index,
-                            meta_state,
-                            flags,
-                            vscroll,
-                            hscroll,
-                            &positions,
-                            &tool_types,
-                            scale,
-                            &mut window_state,
-                        )
+                        crate::events::translate_motion(motion, scale, &mut window_state)
                     };
-                    for input in inputs {
+                    for input in translated.inputs {
                         touch_moves.dispatch(&state, input);
                     }
                 }
@@ -948,62 +885,6 @@ impl AndroidPlatform {
         touch_moves.flush();
 
         self.common.borrow_mut().extra_event_rx = Some(rx);
-    }
-
-    /// Pull captured-pointer events (raw trackpad input while
-    /// MainActivity has pointer capture) off the JNI channel, run them
-    /// through the synthesis state machine, and feed the resulting
-    /// `PlatformInput`s into the primary window. Cursor position is
-    /// tracked inside `captured_pointer::translate`; we just need to
-    /// give it the current window size so it can clamp.
-    fn drain_captured_pointer_events(&self) {
-        let mut rx = match self.common.borrow_mut().captured_pointer_rx.take() {
-            Some(rx) => rx,
-            None => return,
-        };
-        let mut tuning = None;
-        while let Ok(event) = rx.try_recv() {
-            // Route the event to whichever window it came from.
-            // `PRIMARY_WINDOW_ID` (0) → MainActivity's primary window;
-            // anything else → look up in extra_windows. If the window
-            // can't be found we drop the event (window torn down or
-            // not yet attached); dropping is preferable to panicking
-            // on a transient lookup miss.
-            let target = if event.window_id == crate::captured_pointer::PRIMARY_WINDOW_ID {
-                self.common.borrow().window.clone()
-            } else {
-                self.common
-                    .borrow()
-                    .extra_windows
-                    .get(&event.window_id)
-                    .cloned()
-            };
-            let Some(window_ptr) = target else { continue };
-            let (inputs, gliding) = {
-                let mut window_state = window_ptr.state.borrow_mut();
-                let scale_factor = window_state.scale_factor;
-                let tuning = *tuning.get_or_insert_with(|| self.android_gestures().tuning());
-                let inputs = crate::captured_pointer::translate(
-                    &mut window_state.captured,
-                    event,
-                    scale_factor,
-                    tuning,
-                );
-                let gliding = window_state
-                    .captured
-                    .fling
-                    .as_ref()
-                    .is_some_and(|fling| fling.is_gliding());
-                (inputs, gliding)
-            };
-            for input in inputs {
-                window_ptr.handle_input(input);
-            }
-            if gliding {
-                request_frame_callback();
-            }
-        }
-        self.common.borrow_mut().captured_pointer_rx = Some(rx);
     }
 
     /// Drain queued IME events posted from `ZdroidInputConnection` on
@@ -1199,30 +1080,15 @@ impl AndroidPlatform {
     /// Tells each Activity when a setting it mirrors changes. A window opened
     /// later gets the values in `open_extra_window`.
     fn tick_window_settings(&self) {
-        let trackpad_mode = crate::ime::trackpad_mode_enabled();
         let extras_row = crate::programming_extras_row_enabled();
         let soft_keyboard = crate::ime::on_screen_keyboard_enabled();
-        let (trackpad_mode_changed, extras_row_changed, soft_keyboard_changed) = {
+        let (extras_row_changed, soft_keyboard_changed) = {
             let mut common = self.common.borrow_mut();
             (
-                // Off is every Activity's starting state.
-                common
-                    .last_trackpad_mode_enabled
-                    .replace(trackpad_mode)
-                    .unwrap_or(false)
-                    != trackpad_mode,
                 common.last_extras_row_enabled.replace(extras_row) != Some(extras_row),
                 common.last_soft_keyboard_setting.replace(soft_keyboard) != Some(soft_keyboard),
             )
         };
-        if trackpad_mode_changed {
-            crate::jni_env::call_all_windows(
-                &self.android_app,
-                "setTrackpadModeActive",
-                "(Z)V",
-                &[trackpad_mode.into()],
-            );
-        }
         // Only the main window has the extras row.
         if extras_row_changed
             && let Err(error) = crate::jni_env::call_window_method(
@@ -1328,7 +1194,11 @@ impl AndroidPlatform {
                 InputEvent::MotionEvent(motion) => {
                     let translated = {
                         let mut state = window_ptr.state.borrow_mut();
-                        crate::events::translate_motion_event(motion, scale_factor, &mut state)
+                        crate::events::translate_motion(
+                            crate::events::Motion::from_event(motion),
+                            scale_factor,
+                            &mut state,
+                        )
                     };
                     for input in translated.inputs {
                         touch_moves.dispatch(&window_ptr, input);
@@ -1688,11 +1558,6 @@ impl Platform for AndroidPlatform {
 
             self.apply_window_insets();
 
-            // Drain JNI-side captured-pointer (trackpad) events. Active
-            // only while `MainActivity` has pointer capture; otherwise
-            // the channel sits idle.
-            self.drain_captured_pointer_events();
-
             // Drain JNI-side IME events (commit/composition/key/delete
             // delivered by `ZdroidInputConnection` on Android's UI
             // thread). Dispatches into the primary window's
@@ -1720,11 +1585,6 @@ impl Platform for AndroidPlatform {
                         common.extra_windows.values().cloned().collect::<Vec<_>>(),
                     )
                 };
-                // A trackpad scroll's glide steps on the vsync, before the
-                // windows paint it.
-                for window_ptr in primary.iter().chain(&extras) {
-                    advance_trackpad_glide(window_ptr);
-                }
                 // While frames that present run back to back (scrolling,
                 // animations), ask for the next vsync before painting, as
                 // Android's own animations do: a paint that overruns the
@@ -1873,9 +1733,9 @@ impl Platform for AndroidPlatform {
         let scale_factor = self.compute_scale_factor();
         window.ptr().attach_surface(native_window, scale_factor)?;
         // `MainActivity` reports its insets long before gpui opens its window.
-        window.ptr().set_insets(crate::insets::reported(
-            crate::captured_pointer::PRIMARY_WINDOW_ID,
-        ));
+        window
+            .ptr()
+            .set_insets(crate::insets::reported(crate::insets::PRIMARY_WINDOW_ID));
 
         self.common.borrow_mut().window = Some(window.ptr());
         self.common.borrow_mut().active_window = Some(handle);

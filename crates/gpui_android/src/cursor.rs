@@ -1,6 +1,5 @@
 //! Bridge between gpui's `CursorStyle` and Android's `PointerIcon`. Each
-//! window's `WindowPointer.setCursorStyle` sets it on its decor view and on its
-//! cursor sprite.
+//! window's `ZdroidWindow.setCursorStyle` sets it on its decor view.
 
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -56,25 +55,5 @@ pub(crate) fn set_pointer_icon(android_app: &AndroidApp, style: CursorStyle) {
             "(I)V",
             &[icon_type.into()],
         );
-    }
-}
-
-/// Positions the window's cursor sprite for the virtual trackpad, in physical
-/// pixels.
-pub(crate) fn move_trackpad_cursor(
-    android_app: &AndroidApp,
-    extra_window_id: Option<u64>,
-    x: f32,
-    y: f32,
-) {
-    let result = crate::jni_env::call_window_method(
-        android_app,
-        extra_window_id,
-        "setTrackpadCursorPosition",
-        "(FF)V",
-        &[x.into(), y.into()],
-    );
-    if let Err(err) = result {
-        log::warn!("move_trackpad_cursor failed: {err:#}");
     }
 }
