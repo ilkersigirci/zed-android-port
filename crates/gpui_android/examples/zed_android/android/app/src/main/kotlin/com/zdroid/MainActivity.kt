@@ -513,8 +513,11 @@ class MainActivity : GameActivity(), ZdroidWindow {
             Toast.makeText(this, "Other apps can't open ${file.path}", Toast.LENGTH_LONG).show()
             return
         }
+        // The provider's type for a file it can't identify, which almost no app
+        // accepts, so such a file gets Android's full list of apps instead.
+        val type = contentResolver.getType(uri)?.takeUnless { it == "application/octet-stream" }
         val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, contentResolver.getType(uri) ?: "*/*")
+            .setDataAndType(uri, type ?: "*/*")
             .addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or

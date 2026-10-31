@@ -3,9 +3,9 @@
 //! `PlatformInput::KeyDown` / `KeyUp` / `ModifiersChanged`.
 //!
 //! A key types what the keyboard's layout in Android's settings says. Its name
-//! for shortcuts follows Zed's Linux backend: a character the US layout has
-//! names the key, and any other falls back to the key's US position, so on a
-//! Turkish layout `ğ` types `ğ` and Ctrl+`ğ` is still `ctrl-[`.
+//! for shortcuts follows Zed's Linux backend: a character in ASCII names the key,
+//! and any other leaves it named by its keycode on a US layout, so on a Turkish
+//! layout `ğ` types `ğ` and Ctrl+`ğ` is still `ctrl-[`.
 
 use std::cell::Cell;
 
@@ -168,7 +168,7 @@ fn typed_by_layout(
         if !is_down || is_shortcut {
             return Some(Typed::default());
         }
-        let dead = char::from_u32(raw & !COMBINING_ACCENT);
+        let dead = char::from_u32(raw & !COMBINING_ACCENT).map(typable_accent);
         let Some(accent) = accent else {
             PENDING_ACCENT.set(dead);
             return None;
@@ -180,7 +180,7 @@ fn typed_by_layout(
             PENDING_ACCENT.set(dead);
         }
         return Some(Typed {
-            character: None,
+            character: Some(accent),
             text: Some(accent.to_string()),
             used_alt_gr,
         });
@@ -200,11 +200,29 @@ fn typed_by_layout(
         },
         None => character.to_string(),
     };
+    // A space after a dead key types the accent on its own, and is that key.
+    let character = match accent {
+        Some(accent) if character == ' ' => accent,
+        _ => character,
+    };
     Some(Typed {
         character: Some(character),
         text: Some(text),
         used_alt_gr,
     })
+}
+
+/// `KeyCharacterMap` reports the dead keys for `^`, `~` and `` ` `` with spacing
+/// accents outside ASCII, which is what they'd then type: Android's Turkish
+/// layout has all three only as dead keys. `getDeadChar` combines the ASCII
+/// characters the same way.
+fn typable_accent(accent: char) -> char {
+    match accent {
+        '\u{02C6}' => '^',
+        '\u{02DC}' => '~',
+        '\u{02CB}' => '`',
+        other => other,
+    }
 }
 
 /// The raw `KeyCharacterMap.get` result for a key, and whether AltGr produced
@@ -280,17 +298,17 @@ fn is_modifier_key(code: Keycode) -> bool {
 }
 
 fn build_keystroke(code: Keycode, mut modifiers: Modifiers, typed: Typed) -> Keystroke {
-    let (key, key_char) = if let Some(named) = named_key(code) {
+    let (key, key_char) = if let Some(named) = named_key(code).filter(|_| typed.character.is_none())
+    {
         // Space is the one named key where gpui still wants a printable
         // key_char so text-input paths can insert " ".
-        let key_char =
-            matches!(code, Keycode::Space).then(|| typed.text.unwrap_or_else(|| " ".to_string()));
+        let key_char = matches!(code, Keycode::Space).then(|| " ".to_string());
         (named.to_string(), key_char)
     } else {
         let us_key = lowercased_key(code);
         let us_typed = us_key.map(|ch| if modifiers.shift { apply_shift(ch) } else { ch });
         // As Zed's Linux backend does, a character outside ASCII leaves the
-        // key named by its US position, so shortcuts stay on the same keys.
+        // key named as it is on a US layout, so that it still works in shortcuts.
         let key_name = typed
             .character
             .filter(char::is_ascii)
@@ -569,17 +587,25 @@ mod tests {
     }
 
     #[test]
-    fn space_finishing_a_dead_key_types_the_accent() {
+    fn space_finishing_a_dead_key_is_the_accent_key() {
         let keystroke = key_down(
             Keycode::Space,
             0,
             Typed {
                 text: Some("~".to_string()),
-                ..typing(' ')
+                ..typing('~')
             },
         );
-        assert_eq!(keystroke.key, "space");
+        assert_eq!(keystroke.key, "~");
         assert_eq!(keystroke.key_char.as_deref(), Some("~"));
+    }
+
+    #[test]
+    fn accents_with_an_ascii_form_type_it() {
+        assert_eq!(typable_accent('\u{02C6}'), '^');
+        assert_eq!(typable_accent('\u{02DC}'), '~');
+        assert_eq!(typable_accent('\u{02CB}'), '`');
+        assert_eq!(typable_accent('\u{00B4}'), '\u{00B4}');
     }
 
     #[test]

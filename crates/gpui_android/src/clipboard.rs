@@ -41,25 +41,24 @@ pub(crate) fn read(android_app: &AndroidApp) -> Option<ClipboardItem> {
             log::warn!("clipboard: read failed: {error:#}");
             None
         });
-        let image = read_image(android_app).unwrap_or_else(|error| {
-            log::warn!("clipboard: reading an image failed: {error:#}");
-            None
-        });
-        let item = clipboard_item(text, image);
+        let item = clipboard_item(android_app, text);
         READ_CACHE.set(Some((Instant::now(), item.clone())));
         item
     })
 }
 
-fn clipboard_item(text: Option<String>, image: Option<Image>) -> Option<ClipboardItem> {
-    let mut item = text.map(ClipboardItem::new_string);
-    if let Some(image) = image {
-        match &mut item {
-            Some(item) => item.entries.push(ClipboardEntry::Image(image)),
-            None => item = Some(ClipboardItem::new_image(&image)),
-        }
+/// A clip with text is that text. An item with both would make vim's registers,
+/// which only take a lone text entry, paste nothing.
+fn clipboard_item(android_app: &AndroidApp, text: Option<String>) -> Option<ClipboardItem> {
+    if let Some(text) = text.filter(|text| !text.is_empty()) {
+        IMAGE_CACHE.set(None);
+        return Some(ClipboardItem::new_string(text));
     }
-    item
+    let image = read_image(android_app).unwrap_or_else(|error| {
+        log::warn!("clipboard: reading an image failed: {error:#}");
+        None
+    })?;
+    Some(ClipboardItem::new_image(&image))
 }
 
 pub(crate) fn write(android_app: &AndroidApp, item: ClipboardItem) {

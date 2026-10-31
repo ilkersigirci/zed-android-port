@@ -36,7 +36,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Zed's touch gestures: momentum scrolling, double-tap to select a word, and two-finger swipes that scroll. A finger also drags pane splitters and dock edges, and a long press followed by a drag moves tabs and project panel entries. Tabs always show their close button.
 - The on-screen keyboard behaves like other Android apps': it shows when you tap a text field or open a search box, not when you open a file, and the window's content stays above it. Its toggle is in the status bar.
 - Long press in the terminal opens its context menu, with **Open in Browser** for a selected link.
-- A physical keyboard types what the layout in Android's settings says, including AltGr characters and dead keys, and shortcuts stay on the same keys as on a US layout.
+- A physical keyboard types what the layout in Android's settings says, including AltGr characters and dead keys, and letters a US keyboard doesn't have still work in shortcuts.
 - Ctrl+click, Shift+click and Alt+click work with a mouse or trackpad, Ctrl+tap opens links, and horizontal wheel scrolling works.
 - Samsung DeX: clicks and hover land under the pointer in freeform windows. The Book Cover trackpad follows your finger in landscape, and its two-finger scrolls glide on after the fingers lift, as finger scrolls do.
 

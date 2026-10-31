@@ -62,7 +62,7 @@ A two-finger scroll on a captured trackpad keeps gliding after the fingers lift,
 
 ## (h) Long press drags
 
-A long press on an element gpui can drag, such as a tab or a project panel entry, acts as a held left button, so the finger moves it with gpui's own drag and drop.
+A long press on an element gpui can drag, such as a tab or a project panel entry, acts as a held left button, so the finger moves it with gpui's own drag and drop. Such an element no longer shows its tooltip on a long press, which gpui otherwise does, since both would claim the gesture.
 
 - Ours: `Window::begin_long_press_drag` and `Window::dispatch_long_press_drag` in `crates/gpui/src/window.rs`, and the `LongPressEvent` listener by the drag source in `Interactivity::paint_mouse_listeners`, `crates/gpui/src/elements/div.rs`.
 - Builds on: `LongPressEvent` and gpui's `on_drag`, `on_drag_move` and `on_drop`, which follow mouse events.

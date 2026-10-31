@@ -5878,10 +5878,6 @@ impl Window {
             && self.touch_gestures.pending_long_press().is_some()
         {
             self.long_press_capture = None;
-            #[cfg(any(test, target_os = "android"))]
-            {
-                self.long_press_drag = false;
-            }
         }
         let mut tapped = false;
         for gesture in recognized_gestures {
