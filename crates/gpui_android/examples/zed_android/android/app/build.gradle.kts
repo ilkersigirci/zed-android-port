@@ -135,7 +135,7 @@ tasks.register<Exec>("buildAskpassHelper") {
         "-t",
         "arm64-v8a",
         "-P",
-        "26",
+        "31",
         "build",
         "--release",
         "--locked",
@@ -193,7 +193,7 @@ tasks.register<Exec>("buildZdLoader") {
         "-t",
         "arm64-v8a",
         "-P",
-        "26",
+        "31",
         "build",
         "--release",
         "--locked",
@@ -204,12 +204,11 @@ tasks.register<Exec>("buildZdLoader") {
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
         environment("ANDROID_NDK_HOME", ndk)
     }
-    // The app build exports RUSTFLAGS (+fp16 for gemm-f16). Cargo lets an
-    // environment RUSTFLAGS replace the target rustflags in a crate's
-    // .cargo/config.toml, which for the loader means losing the static,
-    // fixed-base, no-crt link: crt1.o then defines a second `_start` and
-    // lld fails with a duplicate symbol. Strip the inherited flags so the
-    // loader's own config governs.
+    // Cargo lets an environment RUSTFLAGS replace the target rustflags in a
+    // crate's .cargo/config.toml, which for the loader means losing the
+    // static, fixed-base, no-crt link: crt1.o then defines a second `_start`
+    // and lld fails with a duplicate symbol. So the loader's own config governs
+    // whatever the environment holds.
     environment.remove("RUSTFLAGS")
     environment.remove("CARGO_ENCODED_RUSTFLAGS")
 
@@ -253,19 +252,15 @@ android {
     namespace = "com.zdroid"
     compileSdk = 35
 
-    // Pin the NDK explicitly so reproducibility doesn't depend on whatever
-    // `sdkmanager --list_installed` happens to surface. Bionic's
-    // `forkpty()` is in API 23+, so any NDK ≥ r21 is sufficient; we use r27
-    // because that's the one we shipped L1 with and `+fp16` codegen
-    // (gemm-f16) wants a recent toolchain.
+    // Pinned so builds don't depend on which NDK happens to be installed.
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.zdroid"
-        // minSdk = 26 enforces bionic ≥ Oreo. `forkpty()` is on the symbol
-        // table from API 23, but cpal/livekit transitive crates require
-        // libaaudio which is API 26.
-        minSdk = 26
+        // Android 12. Release builds need Armv9 cores (.cargo/config.toml),
+        // which shipped with it. Keep in sync with `-P` in the two tasks above
+        // and `ANDROID_PLATFORM` in zdroid_apk.yml.
+        minSdk = 31
         // targetSdk 35. The old pin at 28 kept the app in a SELinux domain
         // that may exec app-private files; the rootfs engine made that
         // moot (the kernel only execs the loader in the native library
@@ -273,11 +268,11 @@ android {
         // level buys: no "built for an older version" install warning, a
         // real notification permission prompt (33+), and the foreground
         // service type declared here is enforced (34+). What it costs:
-        // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE)
-        // on Android 11+; see AndroidManifest.xml.
+        // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE);
+        // see AndroidManifest.xml.
         targetSdk = 35
-        versionCode = 66
-        versionName = "0.10.1"
+        versionCode = 67
+        versionName = "0.11.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -356,6 +351,4 @@ dependencies {
     implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
-    // ActivityResultLauncher / ActivityResultContracts for SAF picker.
-    implementation("androidx.activity:activity-ktx:1.9.3")
 }

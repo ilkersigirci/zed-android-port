@@ -9,7 +9,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
@@ -48,15 +47,12 @@ class ZdRuntimeService : Service() {
         }
         val backgroundMode = intent?.getBooleanExtra(EXTRA_BACKGROUND_MODE, false) ?: false
         val notification = buildNotification(backgroundMode)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        )
         val keepAwake = intent?.getBooleanExtra(EXTRA_KEEP_AWAKE, false) ?: false
         if (keepAwake) acquireWakeLock() else releaseWakeLock()
         // Not sticky: the app restarts the service from its own state after
@@ -74,7 +70,6 @@ class ZdRuntimeService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         // Releases before 0.10 posted Keep Running in Background's
         // notification on a channel of its own.
-        manager.deleteNotificationChannel(LEGACY_BACKGROUND_MODE_CHANNEL_ID)
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -154,7 +149,6 @@ class ZdRuntimeService : Service() {
         private const val EXTRA_KEEP_AWAKE = "keep_awake"
         private const val EXTRA_BACKGROUND_MODE = "background_mode"
         private const val CHANNEL_ID = "runtime"
-        private const val LEGACY_BACKGROUND_MODE_CHANNEL_ID = "zdroid-background-mode"
         private const val NOTIFICATION_ID = 1
         private const val WAKE_LOCK_TAG = "zdroid:runtime"
         private const val TAG = "zed_android_runtime"

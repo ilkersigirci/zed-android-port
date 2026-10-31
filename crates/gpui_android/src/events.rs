@@ -17,9 +17,6 @@
 //!   state (mouse + touch both use the run-tracking).
 //! - [`keyboard`] for hardware keys (entry points
 //!   [`translate_key_event`] and [`translate_extra_key_event`]).
-//!
-//! IME / soft-keyboard composition will land in its own module
-//! (see `docs/workarounds/deferred-soft-keyboard.md`).
 
 pub(crate) mod click_track;
 pub(crate) mod keyboard;
@@ -70,6 +67,8 @@ pub(crate) const JAVA_ACTION_POINTER_UP: i32 = 6;
 pub(crate) const JAVA_ACTION_HOVER_MOVE: i32 = 7;
 pub(crate) const JAVA_ACTION_SCROLL: i32 = 8;
 pub(crate) const JAVA_ACTION_HOVER_ENTER: i32 = 9;
+pub(crate) const JAVA_ACTION_BUTTON_PRESS: i32 = 11;
+pub(crate) const JAVA_ACTION_BUTTON_RELEASE: i32 = 12;
 
 /// Java `MotionEvent.TOOL_TYPE_PALM`, for the same reason.
 pub(crate) const JAVA_TOOL_TYPE_PALM: i32 = 5;
@@ -124,19 +123,14 @@ pub(crate) fn translate_motion_event(
             if let Some(button) = pressed_mouse_button
                 && button != MouseButton::Left
             {
-                let click_count = state
-                    .clicks
-                    .next_click_count(button, position, input_source);
+                let click_count = state.clicks.next_click_count(button, position);
                 state.clicks.mark_non_primary_down(button);
                 out.push(mouse::button_down(button, position, modifiers, click_count));
                 return out.into();
             }
             // Mouse left button down. Latch position + time and emit
             // Down(Left) immediately for instant click feedback.
-            let click_count =
-                state
-                    .clicks
-                    .next_click_count(MouseButton::Left, position, input_source);
+            let click_count = state.clicks.next_click_count(MouseButton::Left, position);
             state.clicks.record_primary_down(position);
             out.push(mouse::button_down(
                 MouseButton::Left,
@@ -148,7 +142,8 @@ pub(crate) fn translate_motion_event(
         MotionAction::Up => {
             // Mouse button release. Resolve the latched click.
             if let click_track::UpOutcome::Emit(button) = state.clicks.finalize_up() {
-                out.push(mouse::button_up(button, position, modifiers));
+                let click_count = state.clicks.click_count();
+                out.push(mouse::button_up(button, position, modifiers, click_count));
             }
         }
         MotionAction::Move => {
@@ -220,11 +215,9 @@ pub(crate) fn translate_motion_event(
 /// the mouse path below. The tool types only tell palms apart.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn translate_extra_motion_event(
-    window_id: u64,
     action_masked: i32,
     action_index: i32,
     meta_state: i32,
-    button_state: i32,
     flags: i32,
     vscroll: f32,
     hscroll: f32,
@@ -253,14 +246,10 @@ pub(crate) fn translate_extra_motion_event(
     if is_touch_action {
         return crate::touch::dispatch_extra(
             state,
-            window_id,
             action_masked,
             action_index,
             meta_state,
-            button_state,
             flags,
-            vscroll,
-            hscroll,
             positions,
             tool_types,
             scale_factor,

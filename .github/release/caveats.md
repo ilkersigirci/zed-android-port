@@ -2,6 +2,7 @@
 - Files under `/sdcard` need Android's All files access: Zdroid opens the toggle once on first launch, and **Settings → Android → Allow Access to /sdcard** opens it again. Projects under the app's own folder need nothing.
 - Uninstalling Zdroid or clearing its data deletes the home folder, with your projects, SSH keys and logins, and Android doesn't back it up. Push projects to a git remote, or copy them to `~/storage/shared`, to keep them.
 - **Open with** from the Files app edits a file where it is when it's on this device's storage and All files access is on. Other files, such as ones a cloud app serves, open as a copy in `~/received`, and saving the copy doesn't change the original.
+- Zed's path picker takes one path at a time, so the agent's **Add Images** attaches one image per pick.
 - Android stops child processes past 32 across all apps. On Android 14 and later, **Developer options → Disable child process restrictions** lifts the limit.
 - The runtime has no System V IPC, so PostgreSQL doesn't start in it.
 - With a mouse or trackpad connected, the pointer can't reach the buttons in a pop-up window's title bar: Zdroid captures the pointer for trackpad gestures. Close the Settings window with Ctrl+W, minimize it with Ctrl+M, close other Zdroid windows with Ctrl+Shift+W, or tap the buttons.
@@ -9,6 +10,7 @@
 - A separate Bluetooth or USB trackpad (not the Samsung Book Cover) may move rotated in landscape. Mice are unaffected.
 - A keyboard with a built-in touchpad that Android reports as one device isn't recognized as a keyboard: the keyboard button stays in the status bar, and tapping text can show the on-screen keyboard.
 - A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
+- On One UI with gesture navigation, the status bar's buttons are hard to press with a finger, because Android's gesture area covers them. Use a mouse or trackpad, or the command palette.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints). Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
 - In the terminal, run Codex as `codex --no-daemon`: its background server sandboxes itself with bubblewrap, which Android doesn't allow in an app.
 - Google Antigravity's agent runs on SSH remotes but not locally, where it stops with a tcmalloc out-of-memory error. Its memory allocator needs a 48-bit address space, and Android kernels built for 39-bit addresses, such as the Galaxy Tab S9 Ultra's, don't have one.

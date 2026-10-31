@@ -14,7 +14,6 @@ path = "src/lib.rs"
 android-activity = { version = "0.6", features = ["game-activity"] }
 android_logger = "0.13"
 anyhow = "1"
-jni = "0.21"
 agent_settings = { path = "../../../agent_settings" }
 agent_ui = { path = "../../../agent_ui" }
 acp_tools = { path = "../../../acp_tools" }
@@ -73,13 +72,14 @@ markdown_preview = { path = "../../../markdown_preview" }
 migrator = { path = "../../../migrator" }
 node_runtime = { path = "../../../node_runtime" }
 onboarding = { path = "../../../onboarding" }
+open_path_prompt = { path = "../../../open_path_prompt" }
 outline = { path = "../../../outline" }
 outline_panel = { path = "../../../outline_panel" }
 log = "0.4"
 parking_lot = "0.12.1"
-multi_buffer = { path = "../../../multi_buffer" }
 notifications = { path = "../../../notifications" }
 paths = { path = "../../../paths" }
+picker = { path = "../../../picker" }
 project = { path = "../../../project" }
 prompt_store = { path = "../../../prompt_store" }
 project_panel = { path = "../../../project_panel" }
@@ -98,7 +98,6 @@ svg_preview = { path = "../../../svg_preview" }
 tab_switcher = { path = "../../../tab_switcher" }
 tasks_ui = { path = "../../../tasks_ui" }
 telemetry = { path = "../../../telemetry" }
-terminal = { path = "../../../terminal" }
 terminal_view = { path = "../../../terminal_view" }
 theme_selector = { path = "../../../theme_selector" }
 toolchain_selector = { path = "../../../toolchain_selector" }
@@ -112,7 +111,6 @@ workspace = { path = "../../../workspace" }
 zd_engine_core = { path = "../../../zd_engine_core" }
 zdroid_hooks = { path = "../../../zdroid_hooks" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
-platform_title_bar = { path = "../../../platform_title_bar" }
 release_channel = { path = "../../../release_channel" }
 reqwest_client = { path = "../../../reqwest_client" }
 search = { path = "../../../search" }
@@ -134,7 +132,6 @@ theme = { path = "../../../theme" }
 theme_extension = { path = "../../../theme_extension" }
 theme_settings = { path = "../../../theme_settings" }
 ui = { path = "../../../ui" }
-ui_input = { path = "../../../ui_input" }
 menu = { path = "../../../menu" }
 auto_update = { path = "../../../auto_update" }
 

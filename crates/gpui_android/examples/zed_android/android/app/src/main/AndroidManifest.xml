@@ -3,31 +3,23 @@
     <uses-feature android:name="android.hardware.vulkan.version" android:required="false"/>
 
     <!--
-      Shared storage. Android 11+ (targetSdk 30+) gates raw /sdcard paths
-      behind MANAGE_EXTERNAL_STORAGE, "All files access": a per-app toggle
-      in system settings that MainActivity.requestStoragePermissions opens
-      once on first launch and Settings > Android opens again.
-      READ/WRITE_EXTERNAL_STORAGE stay for Android 8 to 10, where they are
-      the runtime-prompted grants; requestLegacyExternalStorage keeps raw
-      paths on Android 10 and preserveLegacyExternalStorage keeps them
-      across the upgrade from the targetSdk 28 releases on Android 11.
-      Projects under the app files dir need none of this.
+      Shared storage. Raw /sdcard paths need MANAGE_EXTERNAL_STORAGE, "All files
+      access": a per-app toggle in system settings that
+      MainActivity.requestStoragePermissions opens once on first launch and
+      Settings > Android opens again. Projects under the app files dir need none
+      of this.
     -->
     <!-- Required for any HTTP/HTTPS: Zed's HTTP client and every tool in
          the rootfs (apt, curl, git, npm). -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <!-- Required for the in-app updater's package installer session. The
          user still has to grant "Install unknown apps" for this package in
          system settings the first time. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
-    <!-- Runtime foreground service (ZdRuntimeService). FOREGROUND_SERVICE
-         is required from API 28; FOREGROUND_SERVICE_SPECIAL_USE is checked
-         from targetSdk 34 and declared ahead of that bump; WAKE_LOCK backs
-         the optional keep-awake lock; REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+    <!-- Runtime foreground service (ZdRuntimeService). WAKE_LOCK backs the
+         optional keep-awake lock; REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
          lets the app open the exemption dialog; POST_NOTIFICATIONS is the
          service notification on Android 13+ (the service runs without it,
          the notification is just hidden). -->
@@ -39,11 +31,9 @@
 
     <!--
       Backups are off because the home directory holds credentials, such
-      as ~/.ssh keys and git tokens, which `adb backup` and cloud or
-      device-to-device backups would otherwise copy off the device.
-      allowBackup covers Android 11 and earlier; from Android 12,
-      dataExtractionRules does, since allowBackup no longer stops
-      device-to-device transfers for apps targeting it.
+      as ~/.ssh keys and git tokens, which cloud or device-to-device backups
+      would otherwise copy off the device. dataExtractionRules does this;
+      allowBackup alone no longer stops device-to-device transfers.
     -->
     <application
         android:name=".ZedApplication"
@@ -53,10 +43,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.Zdroid.Splash"
-        android:hasCode="true"
         android:appCategory="productivity"
-        android:requestLegacyExternalStorage="true"
-        android:preserveLegacyExternalStorage="true"
         android:resizeableActivity="true">
 
         <!--
@@ -79,10 +66,15 @@
           "Terms of address" language setting. A recreation would end the app:
           MainActivity.onDestroy exits the process because gpui can't restart
           in it. Verbose but cheap.
+
+          singleTask because gpui_android starts once per process, so a second
+          instance can't work. An intent that doesn't match the launcher's, such
+          as the update notification's, would otherwise start one on top.
         -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Zdroid.Splash"
             android:windowLayoutInDisplayCutoutMode="always"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen|grammaticalGender"

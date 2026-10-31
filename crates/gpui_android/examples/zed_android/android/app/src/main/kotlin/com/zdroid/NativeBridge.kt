@@ -13,6 +13,13 @@ import android.view.Surface
 /// `Java_com_zdroid_NativeBridge_<methodName>` symbols. Class name
 /// changes here require matching renames on the Rust side.
 object NativeBridge {
+    // Here rather than in `Application.onCreate`, which also runs when only the
+    // documents provider or a broadcast started the process: this library holds
+    // the whole editor. GameActivity also loads it, which changes nothing.
+    init {
+        System.loadLibrary("zed_android")
+    }
+
     /// Process-death recovery probe. `ExtraWindowActivity.onCreate` calls
     /// this BEFORE any other JNI work. Returns true if the gpui-side has a
     /// live AndroidWindow registered for this `windowId` (this Activity was
@@ -86,7 +93,6 @@ object NativeBridge {
         actionMasked: Int,
         actionIndex: Int,
         metaState: Int,
-        buttonState: Int,
         flags: Int,
         vscroll: Float,
         hscroll: Float,
@@ -124,11 +130,7 @@ object NativeBridge {
     /// extra window's id for spawned windows.
     external fun isHoldDragActive(windowId: Long): Boolean
 
-    /// MainActivity polls this flag to fade out its splash overlay after
-    /// gpui's first paint. The UI and gpui run on different threads.
-    external fun nativeIsZedReady(): Boolean
-
-    /// Captured-pointer sink, called only by [forwardCapturedPointer].
+    /// Captured-pointer sink, called only by [WindowPointer].
     /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
     /// window's id. `rxs`/`rys` are `AXIS_RELATIVE_X` /
     /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
@@ -198,10 +200,9 @@ object NativeBridge {
     /// as motions and operators).
     external fun nativeImeRouteAsKeys(windowId: Long): Boolean
 
-    /// Mirror Kotlin's `imeShown` flag into the Rust-side global
-    /// `SOFT_KEYBOARD_VISIBLE` atomic. Pushed on every transition
-    /// (showSoftInput / hideSoftInputFromWindow / WindowInsetsListener
-    /// edge). The status bar keyboard button reads this via
+    /// Whether the on-screen keyboard is up, from [WindowIme], into the
+    /// Rust-side global `SOFT_KEYBOARD_VISIBLE` atomic. The status bar
+    /// keyboard button reads this via
     /// `gpui_android::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)

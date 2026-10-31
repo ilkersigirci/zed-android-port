@@ -11,16 +11,6 @@ import android.util.Log
 import android.view.Surface
 import android.view.SurfaceControl
 import android.view.SurfaceView
-import androidx.annotation.RequiresApi
-
-// Activities retain this interface after constructing the API 29 implementation
-// behind a version check; calling it does not itself require a newer Android API.
-internal interface CursorOverlay {
-    fun move(x: Float, y: Float)
-    fun setStyle(style: Int)
-    fun setVisible(visible: Boolean)
-    fun release()
-}
 
 /// Hardware-composited cursor sprite. Lives as a child `SurfaceControl`
 /// of the main SurfaceView's SurfaceControl, so SurfaceFlinger composes
@@ -38,17 +28,11 @@ internal interface CursorOverlay {
 /// `displaySizePx` × `displaySizePx`, scaled to that size from the
 /// source bitmap at load time so the GPU sampler never gets involved.
 ///
-/// API 29+ only. SurfaceView.getSurfaceControl(), SurfaceControl.Builder,
-/// and SurfaceControl.Transaction were all added in Android 10. Older
-/// devices fall back to no cursor sprite (the trackpad gestures still
-/// work, the user just doesn't see a pointer). Gate at the call site —
-/// don't instantiate this class below API Q.
-@RequiresApi(Build.VERSION_CODES.Q)
 internal class CursorSurfaceControl(
     context: Context,
     parentSurfaceView: SurfaceView,
     private val displaySizePx: Int,
-) : CursorOverlay {
+) {
     private val arrowBitmap = loadCursor(context, R.drawable.cursor_arrow, displaySizePx)
     private val iBeamBitmap = loadCursor(context, R.drawable.cursor_ibeam, displaySizePx)
     private val handBitmap = loadCursor(context, R.drawable.cursor_hand, displaySizePx)
@@ -126,9 +110,7 @@ internal class CursorSurfaceControl(
         // (composed at the panel rate) inherits the drop.
         surfaceControl?.let { sc ->
             transaction.setLayer(sc, 1)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                transaction.setFrameRate(sc, 120f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
-            }
+            transaction.setFrameRate(sc, 120f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
             transaction.apply()
         }
         // Paint the initial arrow sprite so the buffer is non-empty
@@ -141,7 +123,7 @@ internal class CursorSurfaceControl(
     /// subtracted so the sprite's tip points AT (x, y), not its
     /// top-left corner. Hot path: called per captured-pointer motion
     /// event (~200 Hz on Samsung trackpad).
-    override fun move(x: Float, y: Float) {
+    fun move(x: Float, y: Float) {
         if (released) return
         val sc = surfaceControl ?: return
         lastX = x
@@ -150,7 +132,7 @@ internal class CursorSurfaceControl(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             transaction.setPosition(sc, x - hotX, y - hotY)
         } else {
-            // Android 10–12 expose this mapping through setGeometry;
+            // Android 12 exposes this mapping through setGeometry;
             // setPosition became public in Android 13.
             val left = (x - hotX).toInt()
             val top = (y - hotY).toInt()
@@ -166,7 +148,7 @@ internal class CursorSurfaceControl(
     private var pendingArrow: Runnable? = null
     private val arrowHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    override fun setStyle(style: Int) {
+    fun setStyle(style: Int) {
         if (released) return
         // Cancel any pending Arrow transition first — whether this
         // style is Arrow or not, a fresh decision arrives now.
@@ -217,7 +199,7 @@ internal class CursorSurfaceControl(
         }
     }
 
-    override fun setVisible(visible: Boolean) {
+    fun setVisible(visible: Boolean) {
         if (released) return
         if (this.visible == visible) return
         this.visible = visible
@@ -227,7 +209,7 @@ internal class CursorSurfaceControl(
             .apply()
     }
 
-    override fun release() {
+    fun release() {
         if (released) return
         released = true
         // Yank any debounced Arrow runnable before tearing the

@@ -329,35 +329,16 @@ impl MasterProcess {
 
         master_process.arg(format!("ControlPath={}", socket_path.display()));
 
-        // On Android, ssh is launched as a non-interactive subprocess
-        // with no controlling tty, so the default `StrictHostKeyChecking
-        // =ask` aborts on first-connect to any host whose key isn't
-        // already in known_hosts (the user can't see or answer the
-        // prompt). `accept-new` auto-accepts unknown host keys and
-        // appends them to known_hosts, while still rejecting if a
-        // known host's fingerprint changes (TOFU semantics, MITM
-        // protection on subsequent connects). Desktop Zed shows a
-        // host-key-confirmation modal in this case; on Android that
-        // path doesn't trigger before ssh aborts, so we trade the
-        // first-connect verification for the connection actually
-        // happening. Users who want stricter behavior can pre-populate
-        // known_hosts via `ssh-keyscan` from the integrated terminal
-        // or override per-connection in settings.json `ssh_connections
-        // [].args`.
+        // Android: ssh runs without a controlling terminal, and Zed's prompt
+        // for an unknown host key doesn't come up before ssh gives up, so
+        // `accept-new` trusts a new host's key and still refuses a changed
+        // one. `-f` backgrounds the master once it has authenticated: in the
+        // foreground, stdout stays open through the engine loader, so
+        // `wait_connected`, which reads it to its end, never returns.
         #[cfg(target_os = "android")]
         master_process
             .arg("-o")
             .arg("StrictHostKeyChecking=accept-new")
-            // -f: fork into background AFTER auth completes. Without
-            // it, `ssh -N -o ControlMaster=yes` stays foreground with
-            // stdout still attached, so Zed's `wait_connected` (=
-            // read_to_end on stdout) blocks forever even though the
-            // master socket is up and ready. Desktop Zed gets away
-            // without this because the inherited stdio differs; on
-            // Android we route through the engine loader which keeps the pipe
-            // alive. -f forces the parent to exit, EOF propagates,
-            // wait_connected resolves, Zed proceeds to platform
-            // detection.
             .arg("-f");
 
         let process = master_process.arg(&destination).spawn()?;
@@ -1121,13 +1102,9 @@ impl SshRemoteConnection {
             ReleaseChannel::Nightly => Ok(None),
             // Android builds come from a Zed stable or preview release and
             // report its version as the app version, so they fetch that
-            // release's server like a client of its channel, while keeping
-            // ReleaseChannel::Dev so the app data dir / settings.json /
-            // recent_projects don't namespace-shift. Client and server must match: newer clients
-            // launch agents through server subcommands older servers lack.
-            // Non-Android Dev clients keep the original bail — they're
-            // presumed to be Zed devs running `cargo run`, who can pre-stage
-            // a remote_server binary on the remote or build from source.
+            // release's server like a client of its channel. Client and
+            // server must match: newer clients launch agents through server
+            // subcommands older servers lack.
             ReleaseChannel::Dev if cfg!(target_os = "android") => Ok(Some(AppVersion::global(cx))),
             ReleaseChannel::Dev => {
                 anyhow::bail!(

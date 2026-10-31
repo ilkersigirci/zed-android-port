@@ -21,7 +21,7 @@ calloop = "0.14.3"
 futures.workspace = true
 libc.workspace = true
 log.workspace = true
-ndk = { version = "0.9", features = ["nativewindow", "api-level-26"] }
+ndk = { version = "0.9", features = ["nativewindow", "api-level-31"] }
 raw-window-handle = "0.6"
 serde_json.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }

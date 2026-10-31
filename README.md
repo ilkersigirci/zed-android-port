@@ -9,7 +9,7 @@ Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilker
 > [!IMPORTANT]
 > - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the runtime and its home folder.
 > - Zdroid 0.10 doesn't open the data of 0.9.x and earlier, which ran Bootstrap or a Kali chroot: its first launch asks to clear Zdroid's data. Copy what you want to keep from the home folder first (**Open Files** in that dialog).
-> - Release builds are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
+> - Release builds need Android 12 or later and are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
 
 Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
 
@@ -64,9 +64,9 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 **Updates, data and security**
 
 - Updates work like desktop Zed's: an **Update Available** button in the title bar, hourly checks (`"auto_update": false` turns them off), download progress, and Android's install session API. An update must be signed with the release certificate.
-- Credentials are stored in the Android Keystore. Plaintext ones from older versions are moved there.
+- Credentials are stored in the Android Keystore.
 - **Open with** in the Files app opens text and source files in Zdroid, where they are.
-- **Open Folder** and **Open Files** use Zed's own path picker, which starts in your home folder and reaches `/sdcard` through `~/storage/shared`. `"use_system_path_prompts": true` brings back Android's picker, which lists the home folder as **Zdroid**.
+- **Open Folder**, **Open Files** and everything else that asks for a path, such as **Clone Repository**, use Zed's own path picker, which starts in the open project or your home folder and reaches `/sdcard` through `~/storage/shared`. Android's picker isn't used, so `"use_system_path_prompts"` has no effect.
 - Cloning into an existing folder or deleting folders from the Files app no longer loses data. Typed text isn't logged, and Android backups are off, since the home folder holds SSH keys and credentials.
 - APKs are built and signed in GitHub Actions with a provenance attestation: `gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port`.
 
@@ -116,7 +116,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/i
 
 ### First launch
 
-1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid (on Android 8 to 10 it is a permission dialog instead); turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
+1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid; turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
 2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
 3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; **Settings → Android → Allow Background Activity** asks for the exemption.
 
@@ -278,7 +278,7 @@ You'll need:
 cd crates/gpui_android/examples/zed_android
 
 ANDROID_NDK_HOME=/path/to/ndk/27.0.12077973 \
-  cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build
+  cargo ndk -t arm64-v8a -P 31 -o android/app/src/main/jniLibs build
 
 cd android
 gradle assembleDebug
@@ -296,7 +296,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver, and release builds are compiled for its CPU. Other high-end devices from 2022 on should run them too (Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later), but older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Android 9+ and Vulkan 1.1 are required too, and only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
 
-A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized; see [`docs/workarounds/deferred-phone-form-factor-polish.md`](crates/gpui_android/docs/workarounds/deferred-phone-form-factor-polish.md).
+A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized.
 
 ---
 

@@ -3,12 +3,11 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use android_activity::AndroidApp;
 use anyhow::Result;
 use futures::channel::oneshot;
-use ndk::native_window::NativeWindow;
+use ndk::native_window::{FrameRateCompatibility, NativeWindow};
 use raw_window_handle as rwh;
 
 use gpui::{
@@ -22,7 +21,9 @@ use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 use crate::display::AndroidDisplay;
 use crate::insets::PhysicalInsets;
-use crate::platform::{frame_presented, request_frame_callback, set_native_window_frame_rate};
+use crate::platform::{frame_presented, request_frame_callback};
+
+const TARGET_FRAME_RATE_HZ: f32 = 120.0;
 
 /// Raw window handle wrapper for Android. Holds a `*mut ANativeWindow` pointer
 /// (obtained from `android_activity::AndroidApp::native_window()`), or null when
@@ -91,25 +92,19 @@ pub(crate) struct AndroidWindowState {
     /// thus refcount-decremented) on `detach_surface` and replaced when
     /// `attach_surface` runs with a fresh window.
     pub(crate) native_window: Option<NativeWindow>,
-    /// After a successful `recover()` the atlas textures have been cleared,
-    /// but gpui's invalidator doesn't know that. The next paint must be
-    /// forced; consumed by `refresh()` via `std::mem::take`.
-    pub(crate) force_render_after_recovery: bool,
+    /// The next paint must redraw everything, because of something gpui's
+    /// invalidator doesn't know about: a fresh swapchain, a cleared atlas, state
+    /// of the status bar's keyboard button. Consumed by `refresh()`.
+    pub(crate) force_render: bool,
     /// Set when a present failed, so the next frame presents the last scene
     /// again; consumed by `refresh()`.
     pub(crate) present_on_next_frame: bool,
     /// Whether the last `draw` failed to present, so a second failure in a
     /// row isn't retried.
     pub(crate) last_present_failed: bool,
-    /// Set true by the platform's `OsClosed` drain handler when the
-    /// underlying `ExtraWindowActivity` has already destroyed (user clicked
-    /// the OS chrome X). `AndroidWindow::Drop` reads this to skip its
-    /// JNI `finishAndRemoveTask` call — the Activity is already gone, so
-    /// issuing the call would warn-log harmlessly. Lives on the state (in
-    /// the `Rc<RefCell>`) rather than on `AndroidWindow` itself so it
-    /// survives the `Box<dyn PlatformWindow>` drop and is reachable from the
-    /// drain handler via the platform's `extra_windows` map.
-    pub(crate) os_closed: AtomicBool,
+    /// The window's `ExtraWindowActivity` is already gone (the user closed it
+    /// through the OS chrome), so `AndroidWindow::Drop` needn't finish it.
+    pub(crate) os_closed: bool,
     /// Set when gpui closes an extra window and drops its `AndroidWindow`.
     /// The platform run loop then drops the window from `extra_windows`.
     pub(crate) closed: bool,
@@ -155,26 +150,17 @@ pub(crate) struct AndroidWindowState {
     /// Feeds finger gestures to gpui's own touch gesture recognizer. Each
     /// window's touchscreen events are isolated.
     pub(crate) touch_feed: crate::touch::TouchFeed,
-    /// Mirror of [`AndroidWindow::extra_window_id`] — set by
-    /// `cx.open_window` after the wrapping `AndroidWindow` is
-    /// built. None for the primary surface, `Some(id)` for
-    /// `ExtraWindowActivity`-backed windows. Read by the touch
-    /// trackpad SM so cursor-sprite JNI calls route to the
-    /// correct Activity (`MainActivity` vs the right extra).
+    /// `None` for the main window, `Some(id)` for one that an
+    /// `ExtraWindowActivity` hosts.
     pub(crate) extra_window_id: Option<u64>,
-    /// IME composition state we maintain ourselves rather than asking
-    /// `handler.marked_text_range()` for it. The handler's marked-text
-    /// support varies by input view (the editor implements it
-    /// correctly, the terminal effectively doesn't), so trusting it
-    /// produced duplicate-letter and lost-on-enter bugs. We track the
-    /// composition's start (UTF-16 index when first setComposingText
-    /// fired) and the last text we set; on each new setComposingText
-    /// we replace `start..start + last_text.utf16_len()` with the new
-    /// text. Cleared on commit / finish / cancel. Phase 2 will add
-    /// proper marked-text composition for the editor; this Phase 1
-    /// behavior is "live commit" — composition immediately visible
-    /// (no underline preview), which is correct for terminal and
-    /// adequate for editor ASCII typing.
+    /// The IME composition, tracked here rather than through
+    /// `handler.marked_text_range()`, whose support varies by input view:
+    /// the editor implements it, the terminal effectively doesn't, and trusting
+    /// it typed duplicate letters and lost text on Enter. Its start is the
+    /// UTF-16 index where the first `setComposingText` landed; each new one
+    /// replaces `start..start + last_text.utf16_len()`. Cleared on commit,
+    /// finish or cancel. So the composition is visibly committed as it's typed,
+    /// with no underline.
     pub(crate) ime_composition_start: Option<usize>,
     pub(crate) ime_composition_text: Option<String>,
     /// Per-window mirror of whether the input handler was present at
@@ -273,20 +259,8 @@ impl AndroidWindowStatePtr {
                 DevicePixels(width.max(1) as i32),
                 DevicePixels(height.max(1) as i32),
             ),
-            // Alpha-aware compositor mode (PreMultiplied with
-            // Inherit fallback). The SurfaceView's pixel format is
-            // what actually decides the compositor's alpha-awareness
-            // on Samsung: MainActivity (GameActivity) ends up
-            // OPAQUE and ExtraWindowActivity's holder is explicitly
-            // OPAQUE too, so the wgpu surface's alpha_mode falls back
-            // to Inherit and behaves opaque regardless of this flag.
-            // Leaving `true` keeps wgpu happy on the rare path where
-            // a future window does want alpha blending (e.g. the
-            // splash overlay's pre-first-paint window-background
-            // bridge), without affecting the post-first-paint editor
-            // rendering. The visible-tint regression had nothing to
-            // do with this flag — see ExtraWindowActivity.kt for the
-            // real fix.
+            // Android's Vulkan surfaces only offer the inherit alpha mode, and
+            // the SurfaceViews' opaque pixel formats decide the compositing.
             transparent: true,
             // Mailbox lets the swap chain discard a stale frame at present
             // time when a newer one is ready, which under irregular paint
@@ -294,14 +268,8 @@ impl AndroidWindowStatePtr {
             // tighter than FIFO. Falls back to Fifo inside the renderer
             // if the surface doesn't expose Mailbox.
             //
-            // Triple-buffer (`Some(3)`) was tried and reverted: at 120Hz
-            // the cost is +8.33ms of in-flight latency which is invisible,
-            // but Samsung's smart-refresh aggressively drops the panel to
-            // 60/30Hz when the app isn't actively rendering, and at those
-            // rates the extra image adds 16-33ms of perceived input
-            // latency that the user feels as overall sluggishness. Stay
-            // at the wgpu default of 2 until we have a way to keep the
-            // panel pinned at 120Hz. See
+            // More swapchain images added 16-33 ms of input latency whenever
+            // Samsung's adaptive panel had dropped to 60 or 30 Hz; see
             // `docs/workarounds/deferred-render-pipeline-perf.md`.
             preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
         };
@@ -317,54 +285,32 @@ impl AndroidWindowStatePtr {
             ),
         };
 
-        if state.renderer.is_some() {
-            let gpu_context = state.gpu_context.clone();
-            let ctx_ref = gpu_context.borrow();
-            let instance = ctx_ref
+        let gpu_context = state.gpu_context.clone();
+        if let Some(renderer) = state.renderer.as_mut() {
+            let instance = gpu_context
+                .borrow()
                 .as_ref()
                 .map(|ctx| ctx.instance.clone())
                 .ok_or_else(|| {
                     anyhow::anyhow!("attach_surface: gpu_context missing on re-attach")
                 })?;
-            drop(ctx_ref);
-            state
-                .renderer
-                .as_mut()
-                .unwrap()
-                .replace_surface(&raw_window, config, &instance)?;
+            renderer.replace_surface(&raw_window, config, &instance)?;
             log::info!("AndroidWindow::attach_surface: replaced surface ({width}x{height})");
         } else {
-            let gpu_context = state.gpu_context.clone();
-            let mut renderer = WgpuRenderer::new(gpu_context, &raw_window, config, None)?;
-            // Brand-color clear so the very first wgpu frame replaces
-            // the SurfaceView's default-black buffer with brand indigo
-            // instead of a black flash between SurfaceView attach and
-            // the first scene paint. Matches `@color/zdroid_bg` (#1E1E2E
-            // = 30/255 ≈ 0.1176) so the visual handoff is:
-            //   SplashActivity AVD → MainActivity windowBackground
-            //   (static icon over indigo) → SurfaceView indigo → editor
-            // with no black gap anywhere. Desktop wgpu embedders keep
-            // the default transparent clear; this is an Android-only
-            // override because we own the entire surface.
-            renderer.set_clear_color(wgpu::Color {
-                r: 30.0 / 255.0,
-                g: 30.0 / 255.0,
-                b: 46.0 / 255.0,
-                a: 1.0,
-            });
+            let renderer = WgpuRenderer::new(gpu_context, &raw_window, config, None)?;
             state.renderer = Some(renderer);
             log::info!("AndroidWindow::attach_surface: created renderer ({width}x{height})");
         }
 
-        // Ask the system for the panel's maximum refresh rate. On API 30+
-        // capable devices this opts us into the panel's top rate, such as
-        // 120Hz (otherwise the compositor leaves us at 60Hz for "compat"
-        // apps regardless of panel capability). No-op on API 26-29 — the
-        // symbol is resolved via `dlsym` rather than direct-linked so
-        // missing-symbol on older devices is silent, not a load-time
-        // crash. Issue every attach so re-attach after rotation /
-        // background-resume re-asserts the hint.
-        set_native_window_frame_rate(raw_window.native_window);
+        // Asks for the panel's top refresh rate on each attach: Android
+        // otherwise leaves the window at 60 Hz. Rates the panel doesn't have
+        // settle at the nearest one. Passing 0 would mean "no preference", which
+        // Samsung's adaptive panel reads as a cue to drop to its idle rate.
+        if let Err(error) =
+            native_window.set_frame_rate(TARGET_FRAME_RATE_HZ, FrameRateCompatibility::Default)
+        {
+            log::warn!("ANativeWindow_setFrameRate failed: {error}");
+        }
 
         // Replace the previous wrapper (if any). The drop releases the prior
         // ANativeWindow refcount; Vulkan's VkSurfaceKHR holds its own ref.
@@ -377,7 +323,7 @@ impl AndroidWindowStatePtr {
         // On first attach this is a no-op duplicate of gpui's own initial
         // `window.draw(cx)` inside open_window, but it's cheap and makes the
         // background→foreground path symmetric.
-        state.force_render_after_recovery = true;
+        state.force_render = true;
         request_frame_callback();
         Ok(())
     }
@@ -532,7 +478,7 @@ impl AndroidWindowStatePtr {
         let (force_render, require_presentation) = {
             let mut state = self.state.borrow_mut();
             (
-                std::mem::take(&mut state.force_render_after_recovery),
+                std::mem::take(&mut state.force_render),
                 std::mem::take(&mut state.present_on_next_frame),
             )
         };
@@ -611,18 +557,26 @@ impl AndroidWindowStatePtr {
         if let PlatformInput::KeyDown(event) = input {
             // Only allow shift as the modifier when inserting text — anything
             // else (ctrl-c, alt-anything) is presumed to be a binding.
-            if event.keystroke.modifiers.is_subset_of(&Modifiers::shift()) {
-                let mut state = self.state.borrow_mut();
-                if let Some(mut input_handler) = state.input_handler.take() {
-                    if let Some(key_char) = &event.keystroke.key_char {
-                        drop(state);
-                        input_handler.replace_text_in_range(None, key_char);
-                        state = self.state.borrow_mut();
-                    }
-                    state.input_handler = Some(input_handler);
-                }
+            if event.keystroke.modifiers.is_subset_of(&Modifiers::shift())
+                && let Some(key_char) = &event.keystroke.key_char
+            {
+                self.with_input_handler(|handler| handler.replace_text_in_range(None, key_char));
             }
         }
+    }
+
+    /// Runs `f` with the window's input handler, if it has one, with the
+    /// window's state free. The handler's calls update gpui, whose effects
+    /// reach back into this window: setting its title, say, as an edit makes
+    /// the buffer dirty.
+    pub(crate) fn with_input_handler<T>(
+        &self,
+        f: impl FnOnce(&mut PlatformInputHandler) -> T,
+    ) -> Option<T> {
+        let mut handler = self.state.borrow_mut().input_handler.take()?;
+        let result = f(&mut handler);
+        self.state.borrow_mut().input_handler = Some(handler);
+        Some(result)
     }
 
     /// Mirrors `Window::dispatch_event`'s bookkeeping.
@@ -663,15 +617,6 @@ impl AndroidWindowStatePtr {
 
 pub(crate) struct AndroidWindow {
     pub(crate) ptr: AndroidWindowStatePtr,
-    /// `Some(window_id)` when this is an extra (multi-window) host backed
-    /// by an `ExtraWindowActivity`. `None` for the GameActivity-owned
-    /// primary window. On `Drop`, an extra window calls
-    /// `multi_window::finish_extra_activity` to ask the JVM to finish the
-    /// Activity (removing it from screen and Recents) — unless the
-    /// `os_closed` flag on state is already set, in which case the Activity
-    /// destroyed itself first (user clicked OS chrome X) and the JNI call
-    /// would warn-log harmlessly.
-    pub(crate) extra_window_id: Option<u64>,
 }
 
 impl AndroidWindow {
@@ -690,10 +635,9 @@ impl AndroidWindow {
             let state = self.ptr.state.borrow();
             (state.android_app.clone(), state.extra_window_id)
         };
-        // Set our view of the keyboard before the asynchronous JNI call:
-        // Kotlin confirms 100-500 ms later, after the IME animation, and a
-        // button showing the old state that long reads as a missed tap.
-        // Kotlin's insets listener corrects it if the request fails.
+        // Set our view of the keyboard before the asynchronous JNI call: a
+        // button showing the old state until the keyboard moves reads as a
+        // missed tap. `WindowIme.kt` corrects it if the request does nothing.
         crate::ime::SOFT_KEYBOARD_VISIBLE.store(show, std::sync::atomic::Ordering::Release);
         crate::ime::request_keyboard(&android_app, extra_window_id, show);
     }
@@ -726,10 +670,10 @@ impl AndroidWindow {
             handle,
             gpu_context,
             native_window: None,
-            force_render_after_recovery: false,
+            force_render: false,
             present_on_next_frame: false,
             last_present_failed: false,
-            os_closed: AtomicBool::new(false),
+            os_closed: false,
             closed: false,
             visibility: WindowVisibility::Visible,
             reported_visibility: WindowVisibility::Visible,
@@ -755,7 +699,6 @@ impl AndroidWindow {
                 state: Rc::new(RefCell::new(state)),
                 callbacks: Rc::new(RefCell::new(Callbacks::default())),
             },
-            extra_window_id: None,
         }
     }
 
@@ -766,19 +709,17 @@ impl AndroidWindow {
 
 impl Drop for AndroidWindow {
     fn drop(&mut self) {
-        let Some(window_id) = self.extra_window_id else {
+        let mut state = self.ptr.state.borrow_mut();
+        // The main window's Activity outlives it.
+        let Some(window_id) = state.extra_window_id else {
             return;
         };
-        self.ptr.state.borrow_mut().closed = true;
-        let state = self.ptr.state.borrow();
-        if state.os_closed.load(std::sync::atomic::Ordering::SeqCst) {
-            // OS-initiated close already happened — Activity is gone, no
-            // need to issue another finish call.
-            return;
+        state.closed = true;
+        if !state.os_closed {
+            let android_app = state.android_app.clone();
+            drop(state);
+            crate::multi_window::finish_extra_activity(&android_app, window_id);
         }
-        let android_app = state.android_app.clone();
-        drop(state);
-        crate::multi_window::finish_extra_activity(&android_app, window_id);
     }
 }
 
@@ -856,7 +797,6 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn take_input_handler(&mut self) -> Option<PlatformInputHandler> {
-        // Same reasoning as `set_input_handler`: no hide_keyboard here.
         self.ptr.state.borrow_mut().input_handler.take()
     }
 
@@ -871,17 +811,13 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn activate(&self) {
-        // Only meaningful for extra windows — primary GameActivity is
-        // always at the foreground of its task. settings_ui's
-        // existing-window dedup (settings_ui.rs:622) calls this after
-        // finding an open SettingsWindow; without it, tapping
-        // "Open Settings" again while Settings is already open silently
-        // no-ops (the existing window stays in the background).
-        let Some(window_id) = self.extra_window_id else {
-            return;
+        let (extra_window_id, android_app) = {
+            let state = self.ptr.state.borrow();
+            (state.extra_window_id, state.android_app.clone())
         };
-        let android_app = self.ptr.state.borrow().android_app.clone();
-        crate::multi_window::activate_extra_activity(&android_app, window_id);
+        if let Some(window_id) = extra_window_id {
+            crate::multi_window::activate_extra_activity(&android_app, window_id);
+        }
     }
 
     fn is_active(&self) -> bool {
@@ -901,16 +837,14 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn set_title(&mut self, title: &str) {
-        // Only routes for extra windows (each `ExtraWindowActivity` carries
-        // OS chrome that displays the title). Primary GameActivity has no
-        // chrome under our setup, so a setTitle there would be invisible.
-        let state = self.ptr.state.borrow();
-        let Some(window_id) = self.extra_window_id else {
-            return;
+        // Only an extra window has OS chrome to show it.
+        let (extra_window_id, android_app) = {
+            let state = self.ptr.state.borrow();
+            (state.extra_window_id, state.android_app.clone())
         };
-        let android_app = state.android_app.clone();
-        drop(state);
-        crate::multi_window::set_extra_activity_title(&android_app, window_id, title);
+        if let Some(window_id) = extra_window_id {
+            crate::multi_window::set_extra_activity_title(&android_app, window_id, title);
+        }
     }
 
     fn set_background_appearance(&self, _bg: WindowBackgroundAppearance) {}
@@ -1018,7 +952,7 @@ impl PlatformWindow for AndroidWindow {
             }
             match renderer.recover(&raw_window) {
                 Ok(()) => {
-                    state.force_render_after_recovery = true;
+                    state.force_render = true;
                     request_frame_callback();
                 }
                 Err(err) => log::error!("GPU recovery failed: {err:#}"),
@@ -1035,7 +969,7 @@ impl PlatformWindow for AndroidWindow {
         // scene again; a failure that repeats, as while the surface is
         // unconfigured, waits for the next change.
         if renderer.needs_redraw() {
-            state.force_render_after_recovery = true;
+            state.force_render = true;
             request_frame_callback();
         } else if !presented && !state.last_present_failed {
             log::debug!("draw: present failed, presenting again on the next frame");

@@ -1,14 +1,18 @@
 package com.zdroid
 
 import android.Manifest
-import android.app.Activity
-import android.content.Context
 import android.app.ActivityManager
+import android.app.ActivityOptions
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.graphics.Rect
 import android.graphics.drawable.Animatable
 import android.hardware.input.InputManager
 import android.net.ConnectivityManager
@@ -25,160 +29,87 @@ import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
-import android.view.InputDevice
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
 import java.security.MessageDigest
 
-/// SAF flows go through legacy `startActivityForResult` instead of
-/// `ActivityResultLauncher` because `ActivityResultRegistry` silently
-/// no-ops `launch()` when the host is in a non-STARTED lifecycle state,
-/// which is the typical case when the call comes from a JNI thread driven
-/// by gpui's render loop. AGDK's own SAF samples use the legacy path for
-/// the same reason — `GameActivity` forwards `onActivityResult` correctly
-/// to its Java host, and we get the result without any of the registry
-/// gating.
-///
-/// Multi-window: this Activity hosts only the primary gpui window (the one
-/// backing `android_app.native_window()` on the Rust side via GameActivity).
-/// Every secondary `cx.open_window` is hosted by a separate
-/// [ExtraWindowActivity] launched via Intent, giving each window OS-managed
-/// freeform chrome on devices that support it. See `multi_window.rs` and
-/// `ExtraWindowActivity.kt`.
-class MainActivity : GameActivity(), ImeHost {
-    /// MainActivity is always gpui's primary window — id 0.
-    override val imeWindowId: Long = 0L
-    /// Splash overlay shown from `super.onCreate` until the gpui-side
-    /// flips `nativeIsZedReady` after first paint. Sits above the
-    /// GameActivity `SurfaceView` so the animated Zdroid sigil is
-    /// visible the entire time gpui boots, hiding the SurfaceView's
-    /// default-black buffer + the wgpu init latency. Removed after
-    /// the ready fade.
+/// Hosts gpui's main window, the one backing `android_app.native_window()`
+/// through GameActivity. Every other `cx.open_window` gets an
+/// [ExtraWindowActivity], which OS-managed freeform windowing gives its own
+/// chrome. See `multi_window.rs`.
+class MainActivity : GameActivity(), ZdroidWindow {
+    /// The animated splash, until the first frame.
     private var splashOverlay: FrameLayout? = null
-    private val splashHandler = Handler(Looper.getMainLooper())
-    private var splashRemoved: Boolean = false
 
-    /// Focusable invisible view that owns the IME `InputConnection`.
-    /// Installed in `onCreate`. Rust signals show/hide via JNI calls
-    /// to `requestIme()` / `hideIme()` on this Activity; those methods
-    /// requestFocus on the host and invoke `InputMethodManager`.
-    private var imeHostView: ImeHostView? = null
-
-    /// Programming extras row (Esc/Tab/Ctrl/Alt/arrows). Inflated
-    /// lazily on first enable so we don't pay the layout cost when
-    /// the user has the setting off. Visibility additionally gates
-    /// on `imeShown` so the row only appears alongside the soft
-    /// keyboard.
+    /// The programming extras row (Esc, Tab, Ctrl, Alt, arrows). Created the
+    /// first time it shows, and gone while the setting is off.
     private var extraKeysView: ExtraKeysView? = null
-    // Kotlin-side cache of `android_input.programming_extras_row`.
-    // Defaults to false so a fresh Activity sits in the "row hidden"
-    // state until the Rust→Kotlin push lands. The push runs on
-    // `runOnUiThread` which queues on the main looper; during boot
-    // the main thread can be busy with language/theme init for
-    // hundreds of ms, leaving a window where this field's value
-    // determines what the IME-show codepath does. Default-true used
-    // to lose that race and inflate the row even when the user had
-    // the setting off. Default-false biases the race direction so the
-    // visible state matches the user's setting whether the push has
-    // landed yet or not.
     private var programmingExtrasRowEnabled: Boolean = false
 
-    /// Mirror of `android_input.on_screen_keyboard`. Read by
-    /// [ImeHostView] to gate Android's IME auto-show on focus.
-    /// Pushed from Rust's `tick_soft_keyboard_setting` reconciler.
-    override var softKeyboardEnabled: Boolean = false
-        private set
-
-    @Suppress("unused")
-    fun setSoftKeyboardEnabled(enabled: Boolean) {
-        runOnUiThread {
-            if (softKeyboardEnabled == enabled) return@runOnUiThread
-            softKeyboardEnabled = enabled
-        }
-    }
-
-    /// Mirror of the [ExtraKeysView] modifier state machine. The
-    /// view stores the source-of-truth state internally; this is
-    /// a published copy read by [extraKeysModifierState] so
-    /// [ZdroidInputConnection.commitText] can attach the
-    /// modifier to a single-character soft-keyboard commit.
+    /// The modifier state [ExtraKeysView] publishes for [ZdroidInputConnection].
     @Volatile
     private var extraKeysPendingMeta: Int = 0
     @Volatile
     private var extraKeysLockedMeta: Int = 0
 
-    /// Mirrors the IME's visibility from our perspective so repeated
-    /// `requestIme(true)` calls within a single visible-IME session
-    /// (every click into a text field makes one) don't re-trigger
-    /// requestFocus / showSoftInput.
-    private var imeShown: Boolean = false
-
-    /// Set right before we hide the IME from our own code (hideIme /
-    /// requestIme). The WindowInsets listener consults this to log
-    /// "we asked the IME to close" apart from "user closed it via Back
-    /// / swipe".
-    private var programmaticHidePending: Boolean = false
-
-    /// Last ime-bottom inset value observed by the listener.
-    /// Listener fires on every inset change; we only treat the
-    /// transition `positive → 0` as a real hide event (which can
-    /// distinguish user-dismiss vs programmatic). A steady-state 0
-    /// reading before/during a show animation must not be confused
-    /// with a hide.
-    private var lastImeInsetBottom: Int = 0
-
-    /// Bumped by every show or hide request, so a [confirmImeShown] check
-    /// from an earlier show can tell it's stale.
-    private var imeRequestGeneration: Int = 0
-
-    /// The programming extras row covers the window above the keyboard,
-    /// so it counts as obscured too.
-    private val insetsReporter = WindowInsetsReporter(
+    override val ime = WindowIme(
+        this,
         PRIMARY_WINDOW_ID,
+        // The row covers the window above the keyboard, so it counts as covered.
         keyboardAccessoryHeight = {
             extraKeysView?.takeIf { it.visibility == View.VISIBLE }?.height ?: 0
         },
-        // Edge-to-edge (setDecorFitsSystemWindows=false) means the OS
-        // does NOT auto-translate content above the IME — the IME draws
-        // over the bottom of our surface. The row, gravity=BOTTOM, would
-        // sit behind the keyboard, so it moves up by the keyboard's
-        // height. This follows every frame of the keyboard's slide: the
-        // insets listener only gets the slide's end state, before it
-        // starts, and gpui's layout ends at the row's top edge.
+        // Edge-to-edge windows aren't moved above the keyboard, and the row
+        // sits at the window's bottom, so it follows every frame of the slide.
         onImeBottomChanged = { imeBottom ->
             extraKeysView?.translationY = -imeBottom.toFloat()
         },
+        onVisibilityChanged = { updateExtrasRowVisibility() },
+        modifierState = { extraKeysPendingMeta or extraKeysLockedMeta },
+        clearPendingModifier = { extraKeysView?.consumePendingModifier() },
     )
 
-    /// After a show request, clears [imeShown] if the IME never appeared,
-    /// so the status bar keyboard button doesn't offer to hide a keyboard
-    /// that isn't there.
-    private fun confirmImeShown(host: ImeHostView) {
-        val generation = ++imeRequestGeneration
-        host.checkImeShownLater {
-            if (generation != imeRequestGeneration || !imeShown) return@checkImeShownLater
-            Log.i("zdroid_ime", "IME didn't appear after the show request, marking it hidden")
-            setImeShown(false)
-        }
+    override val pointer = WindowPointer(
+        this,
+        PRIMARY_WINDOW_ID,
+        surfaceView = { surfaceView() },
+        obscuredBottom = { ime.insetsReporter.obscuredBottom },
+    )
+
+    /// GameActivity's surface. It's looked up once: touch and hover events
+    /// ask for it, and it doesn't change.
+    private var gameSurfaceView: SurfaceView? = null
+
+    private fun surfaceView(): SurfaceView? {
+        gameSurfaceView?.let { return it }
+        return findSurfaceView(window.decorView).also { gameSurfaceView = it }
     }
 
-    /// Keeps [PhysicalKeyboard.blocksIme], and Rust's copy of it, current
-    /// for every window: the status bar hides its keyboard button while a
-    /// physical keyboard blocks the on-screen one.
+    private fun findSurfaceView(view: View): SurfaceView? {
+        if (view is SurfaceView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                findSurfaceView(view.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /// Keeps [PhysicalKeyboard.blocksIme], and Rust's copy of it, current for
+    /// every window: the status bar hides its keyboard button while a physical
+    /// keyboard blocks the on-screen one.
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) = refreshPhysicalKeyboard()
         override fun onInputDeviceRemoved(deviceId: Int) = refreshPhysicalKeyboard()
@@ -186,8 +117,7 @@ class MainActivity : GameActivity(), ImeHost {
     }
 
     /// Android's "show on-screen keyboard while a physical keyboard is
-    /// connected" setting, changed in the system's language and input
-    /// settings.
+    /// connected" setting, changed in the system's language and input settings.
     private val showImeWithHardKeyboardObserver =
         object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) = refreshPhysicalKeyboard()
@@ -200,45 +130,25 @@ class MainActivity : GameActivity(), ImeHost {
         NativeBridge.nativeSetPhysicalKeyboardBlocksIme(blocksIme)
     }
 
-    /// Setter that wraps the `imeShown` mutation and ALSO pushes
-    /// the value into Rust's `SOFT_KEYBOARD_VISIBLE` mirror. Every
-    /// site that flips `imeShown` should go through here so the
-    /// status bar keyboard button's `toggle_state` highlight stays
-    /// synchronized with the OS-side IME visibility.
-    private fun setImeShown(shown: Boolean) {
-        if (imeShown != shown) {
-            imeShown = shown
-            NativeBridge.nativeSetSoftKeyboardVisible(shown)
-            updateExtrasRowVisibility()
-        }
-    }
-
-    /// Reconcile the `ExtraKeysView`'s presence in the content view
-    /// against the two gates: the user setting
-    /// (`programmingExtrasRowEnabled`) and the OS-side IME state
-    /// (`imeShown`). Called whenever either input changes. Inflates
-    /// the view lazily on first enable, then toggles visibility on
-    /// subsequent changes, then removes the view when the setting
-    /// is turned off entirely so we don't pay the layout cost.
+    /// The row shows while the setting is on and the keyboard is up.
     private fun updateExtrasRowVisibility() {
-        val shouldShow = programmingExtrasRowEnabled && imeShown
-        if (shouldShow) {
+        if (programmingExtrasRowEnabled && ime.visible) {
             if (extraKeysView == null) {
                 val view = ExtraKeysView(this) { pending, locked ->
                     extraKeysPendingMeta = pending
                     extraKeysLockedMeta = locked
                 }
-                val params = android.widget.FrameLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.Gravity.BOTTOM,
+                val params = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM,
                 )
                 addContentView(view, params)
-                view.translationY = -insetsReporter.imeBottom.toFloat()
-                // The row has no height until its first layout, and its
-                // height follows the display's density and font scale.
+                view.translationY = -ime.insetsReporter.imeBottom.toFloat()
+                // The row has no height until its first layout, and its height
+                // follows the display's density and font scale.
                 view.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
-                    if (bottom - top != oldBottom - oldTop) insetsReporter.refresh()
+                    if (bottom - top != oldBottom - oldTop) ime.insetsReporter.refresh()
                 }
                 extraKeysView = view
             }
@@ -246,219 +156,21 @@ class MainActivity : GameActivity(), ImeHost {
         } else {
             extraKeysView?.visibility = View.GONE
         }
-        insetsReporter.refresh()
+        ime.insetsReporter.refresh()
     }
 
-    /// Zed's "prevent idle sleep", requested while an agent works. Called
-    /// from `gpui_android::platform` via JNI.
-    @Suppress("unused")
-    fun setKeepScreenOn(on: Boolean) {
-        runOnUiThread {
-            if (on) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            } else {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            }
-        }
-    }
-
-    /// JNI hook: Rust pushes the user's
-    /// `android_input.programming_extras_row` setting here on every
-    /// transition. We persist the new value and reconcile against
-    /// `imeShown`. Called from
-    /// `gpui_android::platform::tick_extras_row_enabled` via JNI.
+    /// The `android_input.programming_extras_row` setting, pushed from
+    /// `gpui_android::platform`.
     @Suppress("unused")
     fun setProgrammingExtrasRowEnabled(enabled: Boolean) {
         runOnUiThread {
             if (programmingExtrasRowEnabled == enabled) return@runOnUiThread
             programmingExtrasRowEnabled = enabled
             if (!enabled) {
-                // Tear down completely so the disabled state is also
-                // free of layout overhead, not just visually hidden.
-                extraKeysView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+                extraKeysView?.let { (it.parent as? ViewGroup)?.removeView(it) }
                 extraKeysView = null
             }
             updateExtrasRowVisibility()
-        }
-    }
-
-    /// Dismiss the soft keyboard. Called from Rust on the edge
-    /// transition out of text-input focus, and when a physical keyboard
-    /// connects.
-    @Suppress("unused")
-    fun hideIme() {
-        runOnUiThread {
-            Log.i("zdroid_ime", "hideIme called imeShown=$imeShown")
-            if (!imeShown) return@runOnUiThread
-            imeRequestGeneration++
-            programmaticHidePending = true
-            // Use WindowInsetsControllerCompat over
-            // `imm.hideSoftInputFromWindow` — the Android docs flag
-            // the latter as racy when focus / window-token state is
-            // mid-transition (the documented "first call silently
-            // fails, second call works" symptom). InsetsController
-            // bypasses that race by going through the OS-level inset
-            // animation path directly. AndroidX's compat shim covers
-            // API 21+ (native path on API 30+).
-            androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
-            setImeShown(false)
-        }
-    }
-
-    /// Show or hide the IME on request, through gpui's
-    /// `request_virtual_keyboard` and `dismiss_virtual_keyboard`: a click
-    /// into a text field, a single-line editor gaining focus, or the status
-    /// bar keyboard button.
-    @Suppress("unused")
-    fun requestIme(show: Boolean) {
-        runOnUiThread {
-            val host = imeHostView ?: return@runOnUiThread
-            if (show) {
-                Log.i("zdroid_ime", "requestIme: showing imeShown=$imeShown")
-                if (!imeShown) {
-                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                        as android.view.inputmethod.InputMethodManager
-                    if (!host.isFocused) host.requestFocus()
-                    imm.showSoftInput(host, 0)
-                    setImeShown(true)
-                    confirmImeShown(host)
-                }
-            } else {
-                Log.i("zdroid_ime", "requestIme: hiding imeShown=$imeShown")
-                if (imeShown) {
-                    imeRequestGeneration++
-                    programmaticHidePending = true
-                    // Modern hide path — see hideIme rationale. Sidesteps
-                    // the `hideSoftInputFromWindow` first-call race that
-                    // produced the two-taps-to-dismiss regression.
-                    androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                        .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
-                    setImeShown(false)
-                }
-            }
-        }
-    }
-
-    /// IME state mirror — written by Rust after every commit /
-    /// compose / delete via [updateImeTextState], read by
-    /// [ZdroidInputConnection]'s `getTextBeforeCursor` /
-    /// `getTextAfterCursor` / `getSelectedText` /
-    /// `getExtractedText` overrides. `@Volatile` because Rust pushes
-    /// from a JNI thread while the IME may query on the UI thread.
-    @Volatile
-    private var imeTextState: ImeTextState? = null
-
-    /// Currently-focused input target kind. Drives the `EditorInfo`
-    /// returned by [ImeHostView.onCreateInputConnection]:
-    ///
-    /// - `ImeInputMode.TERMINAL`: Termux-style raw key stream
-    ///   (`TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | NO_SUGGESTIONS`).
-    ///   Disables composition + autocorrect; each keystroke commits
-    ///   directly so the PTY sees normal hardware-keyboard semantics.
-    /// - `ImeInputMode.CODE_EDITOR`: NO_SUGGESTIONS + IME_MULTI_LINE
-    ///   without VISIBLE_PASSWORD — kills autocorrect for code
-    ///   tokens but preserves composition for CJK input.
-    ///
-    /// `@Volatile`: Rust JNI thread writes via [restartImeForTarget]
-    /// while the UI thread reads in `onCreateInputConnection`.
-    @Volatile
-    override var currentImeMode: Int = ImeInputMode.CODE_EDITOR
-        private set
-
-    override fun getImeTextState(): ImeTextState? = imeTextState
-
-    override val extraKeysModifierState: Int
-        get() = extraKeysPendingMeta or extraKeysLockedMeta
-
-    override fun clearExtrasPendingModifier() {
-        extraKeysView?.consumePendingModifier()
-    }
-
-    /// Switch input modes and force the IME to re-read EditorInfo.
-    /// Called from Rust via JNI when the focused input target's kind
-    /// changes (e.g. user tapped from an editor pane into a terminal
-    /// pane).
-    ///
-    /// Effect: `InputMethodManager.restartInput(imeHostView)` causes
-    /// the framework to invoke `imeHostView.onCreateInputConnection`
-    /// again with a fresh `EditorInfo`, and the IME service receives
-    /// `onFinishInput` + `onStartInput(restarting=true)` — dropping
-    /// any in-flight composition state that was anchored to the
-    /// outgoing target. This is the canonical pattern the Android
-    /// developer guide endorses for "one host view, multiple logical
-    /// editors" architectures.
-    @Suppress("unused")
-    fun restartImeForTarget(modeId: Int) {
-        runOnUiThread {
-            if (modeId != ImeInputMode.TERMINAL && modeId != ImeInputMode.CODE_EDITOR) {
-                Log.w("zdroid_ime", "restartImeForTarget: unknown modeId=$modeId, ignoring")
-                return@runOnUiThread
-            }
-            if (currentImeMode == modeId) {
-                Log.i("zdroid_ime", "restartImeForTarget: already in mode=$modeId, skipping restart")
-                return@runOnUiThread
-            }
-            Log.i(
-                "zdroid_ime",
-                "restartImeForTarget: switching mode ${currentImeMode} -> $modeId"
-            )
-            currentImeMode = modeId
-            val host = imeHostView ?: return@runOnUiThread
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                as android.view.inputmethod.InputMethodManager
-            imm.restartInput(host)
-        }
-    }
-
-    /// Push the current editor text + selection across to Kotlin so
-    /// the IME's queries return real values. Rust calls this after
-    /// every text change. We also fire `InputMethodManager.updateSelection`
-    /// so Gboard / Swiftkey / etc. know the cursor moved — without
-    /// this, they re-confirm by sending the same composition twice
-    /// (the duplicate-letter bug). All offsets are UTF-16 code-unit
-    /// positions in the full document; `windowStart` is where `text`
-    /// begins in document coordinates.
-    @Suppress("unused")
-    fun updateImeTextState(
-        text: String,
-        windowStart: Int,
-        selectionStart: Int,
-        selectionEnd: Int,
-        composingStart: Int,
-        composingEnd: Int,
-    ) {
-        imeTextState = ImeTextState(
-            text = text,
-            windowStart = windowStart,
-            selectionStart = selectionStart,
-            selectionEnd = selectionEnd,
-            composingStart = composingStart,
-            composingEnd = composingEnd,
-        )
-        runOnUiThread {
-            val host = imeHostView ?: return@runOnUiThread
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                as android.view.inputmethod.InputMethodManager
-            imm.updateSelection(host, selectionStart, selectionEnd, composingStart, composingEnd)
-            Log.i(
-                "zdroid_ime",
-                "updateImeTextState: textLen=${text.length} winStart=$windowStart " +
-                    "sel=$selectionStart..$selectionEnd comp=$composingStart..$composingEnd"
-            )
-        }
-    }
-
-    private val splashPoll: Runnable = object : Runnable {
-        override fun run() {
-            if (NativeBridge.nativeIsZedReady()) {
-                onZedReady()
-                return
-            }
-            // 32ms = ~30Hz polling. Splash boot waits 2–30s typically,
-            // so per-frame polling is overkill; 30Hz keeps the
-            // animation smooth and the wake budget low.
-            splashHandler.postDelayed(this, 32L)
         }
     }
 
@@ -474,35 +186,9 @@ class MainActivity : GameActivity(), ImeHost {
         if (!relaunched) {
             OpenedFiles.handle(this, intent)
         }
-        // Edge-to-edge: tell the OS we want to draw behind status / nav bars
-        // and the cutout area, so gpui's surface gets the full display
-        // bounds. Without this, GameActivity respects system insets and the
-        // ANativeWindow we render into is shorter than the screen — visible
-        // as letterboxing under the status bar / above the nav bar on
-        // 1080x2340 phones (Mi 10) and notch-cropping on tablets.
-        //
-        // We also hide the system bars by default and set
-        // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE so a downward swipe
-        // temporarily reveals the status bar (notifications) without
-        // leaving the editor — same UX a native desktop editor gives on
-        // Wayland/macOS.
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat
-                .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
-
-        // IME host. Invisible 1x1 view that owns the InputConnection so
-        // gpui's text input flows through `ZdroidInputConnection`. Lives
-        // alongside GameActivity's SurfaceView; touch dispatch is
-        // unaffected (touch goes through the NDK input queue, focus is
-        // independent). Rust calls `requestIme()` / `hideIme()` to bring
-        // up / dismiss the keyboard.
-        val host = ImeHostView(this)
-        addContentView(host, android.view.ViewGroup.LayoutParams(1, 1))
-        imeHostView = host
-
+        enterEdgeToEdge()
+        ime.install()
+        pointer.install()
         getSystemService(InputManager::class.java)
             ?.registerInputDeviceListener(inputDeviceListener, null)
         contentResolver.registerContentObserver(
@@ -511,279 +197,12 @@ class MainActivity : GameActivity(), ImeHost {
             showImeWithHardKeyboardObserver,
         )
         refreshPhysicalKeyboard()
-
-        // Detect when the IME is dismissed by the user (Back press,
-        // swipe-down on the keyboard) rather than programmatically by
-        // us. Without this, our `imeShown` flag and the OS's actual
-        // visibility drift.
-        //
-        // Mechanism: the `ime()` inset goes from non-zero to zero
-        // whenever the IME closes. We compare to `programmaticHidePending`
-        // (a flag set right before our own hide calls) to tell apart
-        // "we asked it to close" from "user closed it".
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(host) { _, insets ->
-            val imeBottom = insets.getInsets(
-                androidx.core.view.WindowInsetsCompat.Type.ime()
-            ).bottom
-            val wasVisible = lastImeInsetBottom > 0
-            val nowVisible = imeBottom > 0
-
-            if (!wasVisible && nowVisible) {
-                // 0 → positive: IME just opened. Confirms a show, so a
-                // pending `confirmImeShown` check has nothing to correct.
-                imeRequestGeneration++
-                if (!imeShown) setImeShown(true)
-                Log.i("zdroid_ime", "WindowInsets: IME shown (inset bottom=$imeBottom)")
-            } else if (wasVisible && !nowVisible) {
-                // positive → 0: IME just closed. Distinguish source.
-                if (programmaticHidePending) {
-                    programmaticHidePending = false
-                    Log.i("zdroid_ime", "WindowInsets: IME hidden (programmatic)")
-                } else {
-                    Log.i("zdroid_ime", "WindowInsets: IME hidden by user (Back / swipe)")
-                }
-                setImeShown(false)
-            }
-            // Steady-state (no transition, e.g. inset stays 0 during
-            // a show that hasn't animated yet, or stays positive
-            // during typing) — do nothing. The previous bug was firing
-            // "user dismissed" on the steady-state-0 reading right
-            // after our show call, before the animation had started.
-
-            lastImeInsetBottom = imeBottom
-            insetsReporter.onApplyWindowInsets(insets)
-            insets
-        }
-        insetsReporter.install(host)
-
-        // Pointer-capture probe. When the decor view gains focus we ask
-        // Android for raw pointer events. The captured listener
-        // stringifies every event and forwards it to Rust for logging
-        // only; no synthesis yet. This is here to verify whether Samsung's
-        // keyboard-cover trackpad gesture overlay (which
-        // collapses two-finger scroll into single-pointer relative
-        // motion in non-DeX tablet mode, never firing ACTION_SCROLL)
-        // sits above or below the AOSP gesture-recognizer layer that
-        // `requestPointerCapture` disables. If captured events show
-        // multi-touch with `pointerCount > 1` and proper `AXIS_RELATIVE_*`
-        // values, we know we can synthesize scroll on this hardware. If
-        // they look identical to the non-captured path, Samsung is
-        // intercepting deeper than the AOSP layer and we'd need a
-        // different approach.
-        //
-        // Captured events route to the *focused* View, not decorView.
-        // GameActivity sets focus on its SurfaceView, so we install the
-        // listener on whatever SurfaceView we find in the hierarchy
-        // (decorView's) on top of decorView as a fallback. Setting on
-        // both is harmless; whichever the system dispatches to wins.
-        // Captured pointer events route through `onGenericMotionEvent`
-        // on the Activity (overridden below) — Moonlight's pattern.
-        // Avoids the View-level captured-pointer listener path which
-        // requires manipulating SurfaceView focus state and on Samsung
-        // One UI triggers the accessibility tint + key dispatch
-        // regression.
     }
 
-    /// Cursor position tracked in physical pixels (decorView coordinate
-    /// space). Accumulated from each captured-pointer event's
-    /// `AXIS_RELATIVE_X`/`AXIS_RELATIVE_Y` deltas; the same value drives
-    /// `cursorOverlay.move(...)` (visible sprite, hardware-composited
-    /// via SurfaceControl) and is forwarded via JNI as the canonical
-    /// cursor position for the gpui-side editor.
-    private var cursorX: Float = 0f
-    private var cursorY: Float = 0f
-
-    /// Hardware-composited cursor sprite. Lives as a child SurfaceControl
-    /// of the GameActivity SurfaceView (API 29+). Null on older devices
-    /// and during the brief window between Activity create and
-    /// pointer-capture acquire.
-    private var cursorOverlay: CursorOverlay? = null
-
-    /// Desktop-classic auto-hide: cursor disappears on the first
-    /// keystroke and reappears on any pointer motion. Tracked so we
-    /// only toggle visibility on edges, not on every key.
-    // Cursor modality is the process-wide [InputModality] flag now,
-    // not a per-Activity field. Per-Activity tracking drifted across
-    // window transitions: opening a new ExtraWindowActivity via the
-    // trackpad would reset its local flag to "no pointer seen yet"
-    // and leave the cursor hidden until the user moved the trackpad
-    // a second time. The global flag means the freshly-opened
-    // window inherits the app's current modality immediately.
-
-    /// Apply [InputModality] + window focus to the cursor sprite.
-    /// The only place that calls `cursorOverlay?.setVisible`. Each
-    /// Activity owns its own SurfaceControl overlay; without the
-    /// `hasWindowFocus()` gate, the unfocused Activity would also
-    /// draw its cursor and the user would see two sprites at once
-    /// (one in MainActivity behind the settings window, one in the
-    /// settings window itself).
-    private fun applyCursorVisibility() {
-        cursorOverlay?.setVisible(InputModality.isPointer() && hasWindowFocus())
-    }
-
-    /// Called from Rust via JNI (`set_pointer_icon_inner` in
-    /// `crates/gpui_android/src/cursor.rs`). Dispatches to the UI
-    /// thread because the SurfaceControl transaction has to run on a
-    /// looper thread. No-op when the overlay isn't live (capture not
-    /// active or API < 29).
-    @Suppress("unused")
-    fun setCapturedCursorStyle(style: Int) {
-        runOnUiThread {
-            cursorOverlay?.setStyle(style)
-        }
-    }
-
-    /// True while Rust's `TRACKPAD_MODE_ENABLED` atomic is set —
-    /// touch-screen virtual trackpad mode is on. Drives the
-    /// SurfaceControl cursor overlay's visibility independently
-    /// from the hardware-pointer-capture path (the two are OR'd:
-    /// either one keeps the sprite on).
-    private var trackpadModeActive: Boolean = false
-
-    /// Called from Rust via JNI when the user toggles trackpad
-    /// mode. Shows / hides the SurfaceControl cursor overlay and
-    /// builds it lazily if this is the first time it's needed
-    /// (the existing build path is gated on
-    /// `onPointerCaptureChanged`; trackpad mode runs without
-    /// hardware capture so it needs its own bootstrap).
-    @Suppress("unused")
-    fun setTrackpadModeActive(active: Boolean) {
-        runOnUiThread {
-            Log.i(TAG_CAPTURE, "setTrackpadModeActive($active)")
-            trackpadModeActive = active
-            if (active) {
-                ensureCursorOverlay()
-                if (cursorOverlay != null) {
-                    val (w, h) = visibleBounds()
-                    if (cursorX == 0f && cursorY == 0f) {
-                        cursorX = w / 2f
-                        cursorY = h / 2f
-                    }
-                    cursorOverlay?.move(cursorX, cursorY)
-                    // Activating trackpad mode is the user explicitly
-                    // asking for the cursor, so mark pointer as the
-                    // current modality and let the central applier
-                    // show the sprite.
-                    InputModality.setPointer()
-                }
-            } else {
-                // Deactivating trackpad mode flips modality back to
-                // touch (the touchscreen is no longer a cursor
-                // input). If hardware capture is also off, the cursor
-                // genuinely has no reason to be visible.
-                InputModality.setNonPointer()
-            }
-            applyCursorVisibility()
-        }
-    }
-
-    /// Position the cursor sprite at (x, y) physical pixels. Called
-    /// by the Rust touch trackpad state machine after every
-    /// single-finger drag delta. Clamps to the visible surface.
-    @Suppress("unused")
-    fun setTrackpadCursorPosition(x: Float, y: Float) {
-        runOnUiThread {
-            val (w, h) = visibleBounds()
-            cursorX = x.coerceIn(0f, w - 1f)
-            cursorY = y.coerceIn(0f, h - 1f)
-            cursorOverlay?.move(cursorX, cursorY)
-        }
-    }
-
-    override fun onPointerCaptureChanged(hasCapture: Boolean) {
-        super.onPointerCaptureChanged(hasCapture)
-        Log.i(TAG_CAPTURE, "onPointerCaptureChanged hasCapture=$hasCapture")
-        if (hasCapture) {
-            val (w, h) = visibleBounds()
-            cursorX = w / 2f
-            cursorY = h / 2f
-            // Release + rebuild the overlay on every capture-regain so
-            // we anchor to the *current* SurfaceView's SurfaceControl.
-            // The OS can tear down and recreate the SurfaceView's
-            // surface when another activity steals focus (SAF picker,
-            // settings dialogs, etc.), and any SurfaceControl we
-            // previously attached as a child of the old surface gets
-            // orphaned by SurfaceFlinger. Rebuilding on regain is
-            // cheap (small bitmap upload + one SurfaceControl
-            // transaction) and bulletproof.
-            cursorOverlay?.release()
-            cursorOverlay = null
-            ensureCursorOverlay()
-            cursorOverlay?.move(cursorX, cursorY)
-        }
-        // Visibility is NOT touched here. It's driven purely by
-        // `InputModality.isPointer()` (set by handleCapturedEvent,
-        // dispatchTouchEvent, dispatchKeyEvent, setTrackpadModeActive)
-        // and applied by `applyCursorVisibility`. Focus cycles (IME
-        // show/hide, dialog open/close) trigger this callback but
-        // shouldn't change what the user sees — if they were in
-        // touch mode the cursor stays hidden across the cycle. The
-        // call below re-applies the existing modality state to the
-        // freshly-built overlay so a rebuild ends up in the right
-        // visual state without needing per-rebuild flag bookkeeping.
-        applyCursorVisibility()
-    }
-
-    /// Build the SurfaceControl overlay on first capture-gain. API 29+
-    /// gated; older Android leaves the field null and the trackpad
-    /// continues to work without a visible cursor sprite.
-    private fun ensureCursorOverlay() {
-        if (cursorOverlay != null) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-        val surfaceView = findSurfaceView(window.decorView) ?: return
-        val displaySize = (CURSOR_SIZE_DP * resources.displayMetrics.density)
-            .toInt()
-            .coerceAtLeast(16)
-        cursorOverlay = CursorSurfaceControl(this, surfaceView, displaySize)
-    }
-
-    /// The surface above the on-screen keyboard and the extras row, where
-    /// gpui lays out; they would hide the cursor below it.
-    private fun visibleBounds(): Pair<Float, Float> {
-        val sv = findSurfaceView(window.decorView)
-        val w = (sv?.width ?: window.decorView.width).toFloat().coerceAtLeast(1f)
-        val h = ((sv?.height ?: window.decorView.height) - insetsReporter.obscuredBottom)
-            .toFloat()
-            .coerceAtLeast(1f)
-        return w to h
-    }
-
-    private fun findSurfaceView(view: View): SurfaceView? {
-        if (view is SurfaceView) return view
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                val found = findSurfaceView(view.getChildAt(i))
-                if (found != null) return found
-            }
-        }
-        return null
-    }
-
-    /// Attach an animated splash overlay above the GameActivity
-    /// SurfaceView. Stays visible until the gpui-Rust side flips
-    /// `nativeIsZedReady` (first paint completed), at which point
-    /// `onZedReady` fades the overlay out and removes it. The
-    /// overlay covers the SurfaceView's default-black buffer + the
-    /// wgpu boot latency, so the user sees a continuous animation
-    /// from cold start through to the editor's first frame instead
-    /// of icon → black → editor.
-    ///
-    /// Why a sibling View overlay rather than a separate
-    /// SplashActivity:
-    ///   - A separate activity must finish before MainActivity is
-    ///     visible, but gpui (and SurfaceView) can only init while
-    ///     MainActivity is visible, so the transition unavoidably
-    ///     drops the animation mid-boot.
-    ///   - The View-overlay path normally triggers SurfaceView's
-    ///     compositor flip to alpha-aware mode (cursor white-tint
-    ///     regression). Sidestepped here because the wgpu surface
-    ///     is already configured with `transparent: true` +
-    ///     `set_clear_color` to opaque brand indigo; the wgpu
-    ///     output is always fully opaque once it draws anything,
-    ///     so alpha-aware compositing has nothing transparent to
-    ///     bleed through.
+    /// A view above the SurfaceView, so a cold start shows one animation instead
+    /// of icon, black, editor. A separate splash Activity couldn't do this: gpui
+    /// and its surface only start while this Activity is visible.
     private fun installSplashOverlay() {
-        if (splashOverlay != null) return
         val container = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -793,7 +212,7 @@ class MainActivity : GameActivity(), ImeHost {
         }
         val displaySizePx = (200 * resources.displayMetrics.density).toInt()
         val iconParams = FrameLayout.LayoutParams(displaySizePx, displaySizePx).apply {
-            gravity = android.view.Gravity.CENTER
+            gravity = Gravity.CENTER
         }
         val iconView = ImageView(this).apply {
             layoutParams = iconParams
@@ -805,17 +224,16 @@ class MainActivity : GameActivity(), ImeHost {
         decor?.addView(container)
         splashOverlay = container
         (iconView.drawable as? Animatable)?.start()
-        splashHandler.post(splashPoll)
     }
 
-    private fun onZedReady() {
-        if (splashRemoved) return
-        splashRemoved = true
-        splashHandler.removeCallbacks(splashPoll)
+    /// Called once from `gpui_android::platform` after the first paint.
+    @Suppress("unused")
+    fun onFirstFrameDrawn() {
+        runOnUiThread { removeSplashOverlay() }
+    }
+
+    private fun removeSplashOverlay() {
         val overlay = splashOverlay ?: return
-        // Fade alpha + scale up ~10% (the "ripple dissipates" exit
-        // that echoes the launcher icon's brand motif). 350ms feels
-        // intentional without stalling the user's first input.
         overlay.animate()
             .alpha(0f)
             .scaleX(1.10f)
@@ -829,118 +247,25 @@ class MainActivity : GameActivity(), ImeHost {
             .start()
     }
 
-    // installCapturedPointerListenerOnAll removed: we no longer
-    // install the View-level captured-pointer listener anywhere.
-    // Activity.onGenericMotionEvent below is the single capture path.
-
-    /// Activity-level catch for captured pointer events. Per Moonlight's
-    /// pattern (the only Android remote-desktop client that's solved
-    /// trackpad input on Samsung tablets): captured events also arrive
-    /// here when the window has pointer capture, regardless of which
-    /// View has focus. This avoids the `isFocusableInTouchMode=true`
-    /// trap that triggers Samsung One UI's accessibility tint and
-    /// breaks GameActivity's key dispatch.
-    /// Captured-mouse delivery path. Samsung (and AOSP generally for
-    /// SOURCE_MOUSE_RELATIVE, which carries the SOURCE_CLASS_TRACKBALL
-    /// bit) routes captured relative-mouse motion, buttons, AND the wheel
-    /// through processTrackballEvent -> onTrackballEvent, not the
-    /// captured-pointer callback and not onGenericMotionEvent. Verified on
-    /// device: every captured event arrives here. This is THE path that
-    /// makes a Bluetooth mouse work under pointer capture; without it the
-    /// cursor never moved on any tested device.
-    override fun onTrackballEvent(event: MotionEvent): Boolean {
-        if (window.decorView.hasPointerCapture()) {
-            handleCapturedEvent(event)
-            return true
-        }
-        return super.onTrackballEvent(event)
-    }
+    override fun onTrackballEvent(event: MotionEvent): Boolean =
+        pointer.onTrackballEvent(event) || super.onTrackballEvent(event)
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        val source = event.source
-        val isMouseRel = source and InputDevice.SOURCE_MOUSE_RELATIVE != 0
-        val isTouchpad = source and InputDevice.SOURCE_TOUCHPAD != 0
-        val isMouse = source and InputDevice.SOURCE_MOUSE != 0
-        if ((isMouseRel || isTouchpad || isMouse)
-            && window.decorView.hasPointerCapture()) {
-            handleCapturedEvent(event)
-            return true
-        }
-        // Captured events above carry relative motion; only absolute hover
-        // and scroll positions are moved into surface space.
+        if (pointer.onGenericMotionEvent(event)) return true
+        // Captured events above carry relative motion; only absolute hover and
+        // scroll positions are moved into surface space.
         offsetEventToSurface(event)
         return super.onGenericMotionEvent(event)
     }
 
-    private fun handleCapturedEvent(event: MotionEvent) {
-        // Any captured pointer activity makes pointer the current
-        // modality; the central applier ensures the sprite is shown.
-        if (!InputModality.isPointer()) {
-            InputModality.setPointer()
-            applyCursorVisibility()
-        }
-        if (event.actionMasked == MotionEvent.ACTION_MOVE) {
-            // Cursor follows the moving finger in two cases:
-            //   1. Single-finger motion (n=1): standard cursor drag.
-            //   2. Multi-touch while hold-drag is active on the Rust
-            //      side (queried via NativeBridge.isHoldDragActive):
-            //      the user is selecting text by holding finger 1 and
-            //      dragging finger 2, and expects the cursor to follow
-            //      the second finger so they can see the selection
-            //      growing.
-            // For plain two-finger scroll (multi-touch but NOT in
-            // hold-drag), cursor stays pinned per desktop standard.
-            val isHoldDragMultiTouch = event.pointerCount >= 2 &&
-                NativeBridge.isHoldDragActive(PRIMARY_WINDOW_ID)
-            if (event.pointerCount == 1 || isHoldDragMultiTouch) {
-                var sumRx = 0f
-                var sumRy = 0f
-                val limit = event.pointerCount
-                val rotation = displayRotation()
-                for (i in 0 until limit) {
-                    val (dx, dy) = capturedRelativeDelta(event, i, rotation)
-                    sumRx += dx
-                    sumRy += dy
-                }
-                val (maxX, maxY) = visibleBounds()
-                // Mouse-tuned pointer curve. Under pointer capture Android
-                // bypasses its own acceleration and hands us raw device
-                // counts, so without a curve the cursor crawls on a
-                // high-res panel. Skipped while a button is held so
-                // click-drag selection stays precise 1:1 -- mirrors the
-                // touch trackpad SM's hold-drag exemption.
-                val dragging = event.buttonState != 0
-                val moveX = if (dragging) sumRx else accelerateMouse(sumRx)
-                val moveY = if (dragging) sumRy else accelerateMouse(sumRy)
-                cursorX = (cursorX + moveX).coerceIn(0f, maxX - 1f)
-                cursorY = (cursorY + moveY).coerceIn(0f, maxY - 1f)
-                cursorOverlay?.move(cursorX, cursorY)
-            }
-        }
-        forwardCapturedPointer(PRIMARY_WINDOW_ID, event, cursorX, cursorY)
+    override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
+        event?.let(pointer::onTouchDispatched)
+        return super.dispatchTouchEvent(event)
     }
 
-    /// Hide the hardware-pointer cursor sprite when the user shifts
-    /// to direct-touch input. Mirrors `dispatchKeyEvent`'s
-    /// hide-on-keyboard logic so the cursor only sits on screen
-    /// while the user is actually using a hardware pointer. NO-op
-    /// when trackpad mode is active (touch IS the cursor input
-    /// there) or when there's no cursor overlay to hide.
-    /// Reappears on the next pointer activity via
-    /// `handleCapturedEvent`.
-    override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
-        // Direct-touch input flips modality to touch; skipped while
-        // trackpad mode is on because in that mode touch IS the
-        // cursor input (modality stays pointer).
-        if (event != null
-            && !trackpadModeActive
-            && InputModality.isPointer()
-            && event.source and InputDevice.SOURCE_TOUCHSCREEN != 0
-        ) {
-            InputModality.setNonPointer()
-            applyCursorVisibility()
-        }
-        return super.dispatchTouchEvent(event)
+    override fun onPointerCaptureChanged(hasCapture: Boolean) {
+        super.onPointerCaptureChanged(hasCapture)
+        pointer.onPointerCaptureChanged(hasCapture)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -948,8 +273,8 @@ class MainActivity : GameActivity(), ImeHost {
         return super.onTouchEvent(event)
     }
 
-    private var lastSurfaceOffsetX = Int.MIN_VALUE
-    private var lastSurfaceOffsetY = Int.MIN_VALUE
+    private val surfaceLocation = IntArray(2)
+    private val decorLocation = IntArray(2)
 
     /**
      * GameActivity forwards input to gpui from the Activity-level
@@ -962,31 +287,18 @@ class MainActivity : GameActivity(), ImeHost {
      * hit-test with their own coordinates.
      */
     private fun offsetEventToSurface(event: MotionEvent) {
-        val surface = findSurfaceView(window.decorView) ?: return
-        val surfaceLocation = IntArray(2)
-        val decorLocation = IntArray(2)
+        val surface = surfaceView() ?: return
         surface.getLocationInWindow(surfaceLocation)
         window.decorView.getLocationInWindow(decorLocation)
         val offsetX = surfaceLocation[0] - decorLocation[0]
         val offsetY = surfaceLocation[1] - decorLocation[1]
-        if (offsetX != lastSurfaceOffsetX || offsetY != lastSurfaceOffsetY) {
-            Log.i("zdroid_input", "surface input origin offset=($offsetX,$offsetY)")
-            lastSurfaceOffsetX = offsetX
-            lastSurfaceOffsetY = offsetY
-        }
         if (offsetX != 0 || offsetY != 0) {
             event.offsetLocation(-offsetX.toFloat(), -offsetY.toFloat())
         }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Key input flips modality to keyboard; central applier
-        // hides the sprite. ACTION_DOWN only so auto-repeat doesn't
-        // re-apply on every UP/DOWN pair.
-        if (event.action == KeyEvent.ACTION_DOWN && InputModality.isPointer()) {
-            InputModality.setNonPointer()
-            applyCursorVisibility()
-        }
+        pointer.onKeyDispatched(event)
         return super.dispatchKeyEvent(event)
     }
 
@@ -1005,36 +317,64 @@ class MainActivity : GameActivity(), ImeHost {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            if (hasIndirectPointer()) {
-                Log.i(TAG_CAPTURE, "requestPointerCapture()")
-                window.decorView.requestPointerCapture()
-            }
-        } else {
-            window.decorView.releasePointerCapture()
-        }
-        // Move the sprite to the current cursor position so the
-        // first visible-frame after a focus regain is correct, but
-        // visibility itself is determined by `InputModality.isPointer()`
-        // via the central applier. This prevents a focus cycle (IME
-        // show/hide, settings window opening) from blindly re-showing
-        // the cursor when the user was in touch mode.
-        if (hasFocus && trackpadModeActive) {
-            cursorOverlay?.move(cursorX, cursorY)
-        }
-        applyCursorVisibility()
+        pointer.onWindowFocusChanged(hasFocus)
     }
 
-    private fun hasIndirectPointer(): Boolean {
-        val ids = InputDevice.getDeviceIds()
-        for (id in ids) {
-            val dev = InputDevice.getDevice(id) ?: continue
-            val sources = dev.sources
-            if (sources and InputDevice.SOURCE_TOUCHPAD != 0) return true
-            if (sources and InputDevice.SOURCE_MOUSE != 0) return true
-            if (sources and InputDevice.SOURCE_MOUSE_RELATIVE != 0) return true
+    /// Starts the Activity that hosts an extra gpui window, with `bounds` as
+    /// its freeform window's rectangle if it has any. `documentLaunchMode` in
+    /// the manifest gives it its own task; adding the matching intent flags
+    /// here sent this Activity to the background under DeX.
+    @Suppress("unused") // called from Rust via JNI
+    fun launchExtraWindow(windowId: Long, left: Int, top: Int, right: Int, bottom: Int) {
+        val launch = Intent(this, ExtraWindowActivity::class.java)
+            .putExtra(ExtraWindowActivity.EXTRA_WINDOW_ID, windowId)
+        val options = if (right > left && bottom > top) {
+            ActivityOptions.makeBasic()
+                .setLaunchBounds(Rect(left, top, right, bottom))
+                .toBundle()
+        } else {
+            null
         }
-        return false
+        startActivity(launch, options)
+    }
+
+    /// `ViewConfiguration`'s gesture values for gpui's touch recognizer:
+    /// touch slop and minimum fling velocity in logical pixels, then the
+    /// double-tap and long-press timeouts in milliseconds.
+    @Suppress("unused") // called from Rust via JNI
+    fun gestureConfiguration(): FloatArray {
+        val configuration = ViewConfiguration.get(this)
+        val density = resources.displayMetrics.density
+        return floatArrayOf(
+            configuration.scaledTouchSlop / density,
+            configuration.scaledMinimumFlingVelocity / density,
+            ViewConfiguration.getDoubleTapTimeout().toFloat(),
+            ViewConfiguration.getLongPressTimeout().toFloat(),
+        )
+    }
+
+    private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
+
+    @Suppress("unused") // called from Rust via JNI
+    fun readClipboardText(): String? =
+        clipboard.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.text
+            ?.toString()
+
+    /// On the UI thread, in the order of the calls. `setPrimaryClip` is a binder
+    /// call that can outlast a frame, and it overflowed `android_main`'s stack
+    /// from deep in gpui's dispatch.
+    @Suppress("unused") // called from Rust via JNI
+    fun writeClipboardText(text: String) {
+        runOnUiThread {
+            try {
+                clipboard.setPrimaryClip(ClipData.newPlainText("", text))
+            } catch (error: RuntimeException) {
+                // Binder rejects clips too large for one transaction.
+                Log.w(TAG, "couldn't write ${text.length} characters to the clipboard", error)
+            }
+        }
     }
 
     /** Backs the Zdroid menu's background-mode toggle. */
@@ -1084,98 +424,17 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    fun launchOpenTree() {
-        Log.i(TAG, "launchOpenTree() invoked")
-        runOnUiThread {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                )
-                // Suggest the primary external storage root so the picker
-                // lands somewhere familiar instead of "Recent".
-                putExtra(
-                    DocumentsContract.EXTRA_INITIAL_URI,
-                    DocumentsContract.buildRootUri(
-                        "com.android.externalstorage.documents",
-                        "primary"
-                    )
-                )
-            }
-            try {
-                startActivityForResult(intent, REQ_OPEN_TREE)
-                Log.i(TAG, "startActivityForResult OPEN_DOCUMENT_TREE dispatched")
-            } catch (t: Throwable) {
-                Log.e(TAG, "OPEN_DOCUMENT_TREE dispatch threw", t)
-                onPickerResult("")
-            }
-        }
-    }
-
+    /// Raw /sdcard paths need "All files access", a per-app toggle in system
+    /// settings. Opened once per install at boot; the Android settings page
+    /// opens it again on request. File operations on /sdcard fail with a clean
+    /// error without it.
     @Suppress("unused") // called from Rust via JNI
-    fun launchCreateDocument(suggestedName: String) {
-        Log.i(TAG, "launchCreateDocument($suggestedName) invoked")
-        runOnUiThread {
-            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "application/octet-stream"
-                putExtra(Intent.EXTRA_TITLE, suggestedName)
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                )
-            }
-            try {
-                startActivityForResult(intent, REQ_CREATE_DOCUMENT)
-                Log.i(TAG, "startActivityForResult CREATE_DOCUMENT dispatched")
-            } catch (t: Throwable) {
-                Log.e(TAG, "CREATE_DOCUMENT dispatch threw", t)
-                onPickerResult("")
-            }
-        }
-    }
-
-    /// Returns 1 if both READ + WRITE are already granted, 0 if a runtime
-    /// dialog has been posted. Caller fires this once on boot and treats
-    /// the call as best-effort: if the user denies, file-system reads of
-    /// `/storage/emulated/0/...` will EACCES at the syscall layer with a
-    /// clean error.
-    @Suppress("unused") // called from Rust via JNI
-    fun requestStoragePermissions(): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+: raw /sdcard paths need "All files access", a
-            // per-app toggle in system settings rather than a dialog. Open
-            // it once per install; the Android settings page opens it again
-            // on request.
-            if (Environment.isExternalStorageManager()) {
-                Log.i(TAG, "requestStoragePermissions: all files access granted")
-                return 1
-            }
-            val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            if (prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) {
-                Log.i(TAG, "requestStoragePermissions: all files access not granted; asked before")
-                return 2
-            }
-            prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
-            return if (requestAllFilesAccess()) 0 else 2
-        }
-        val needed = listOf(
-            Manifest.permission.READ_EXTERNAL_STORAGE,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        ).filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (needed.isEmpty()) {
-            Log.i(TAG, "requestStoragePermissions: already granted")
-            return 1
-        }
-        Log.i(TAG, "requestStoragePermissions: prompting for ${needed.joinToString(",")}")
-        runOnUiThread {
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_STORAGE_PERMS)
-        }
-        return 0
+    fun requestStoragePermissions() {
+        if (Environment.isExternalStorageManager()) return
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) return
+        prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
+        requestAllFilesAccess()
     }
 
     /// Android's own Clear storage for this app: deletes all of its data and
@@ -1207,14 +466,10 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    /// Open the system "All files access" toggle for this package on
-    /// Android 11+, or the storage permission dialog on older releases.
-    /// Returns true when a screen opened or access already holds.
+    /// Open the system "All files access" toggle for this package. Returns true
+    /// when a screen opened or access already holds.
     @Suppress("unused")
     fun requestAllFilesAccess(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return requestStoragePermissions() != 2
-        }
         if (Environment.isExternalStorageManager()) return true
         val direct = Intent(
             Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -1392,26 +647,19 @@ class MainActivity : GameActivity(), ImeHost {
     @Suppress("DEPRECATION")
     private fun isTrustedUpdateApk(file: File): Boolean {
         return try {
-            // Android 9 leaves signingInfo unset for APK archives, so also
-            // request the legacy signatures as a fallback.
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
-            } else {
-                PackageManager.GET_SIGNATURES
-            }
+            // Android 9 left signingInfo unset for APK archives. If this ever
+            // refused a good APK, no update could fix it, so the legacy
+            // signatures stay as a fallback.
+            val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
             val current = packageManager.getPackageInfo(packageName, flags)
             val archive = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
                 ?: return false
             if (archive.packageName != packageName) return false
 
-            fun signerDigests(info: android.content.pm.PackageInfo): Set<String> {
-                val signingInfoSigners = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
-                } else {
-                    null
-                }
-                val signatures = signingInfoSigners ?: info.signatures.orEmpty()
-                return signatures.map { signature ->
+            fun signerDigests(info: PackageInfo): Set<String> {
+                val signers = info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
+                    ?: info.signatures.orEmpty()
+                return signers.map { signature ->
                     MessageDigest.getInstance("SHA-256")
                         .digest(signature.toByteArray())
                         .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
@@ -1494,33 +742,17 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    /// Force a clean process exit when the Activity is destroyed.
-    ///
-    /// gpui_android has multiple static-state init paths (event channels,
-    /// JNI globals, OnceLock guards) that assume process-scoped uniqueness.
-    /// Android keeps the .so resident across Activity destroy/recreate
-    /// cycles when memory pressure or AL_Kill reaps just the Activity but
-    /// not the whole process. The next `android_main` re-entry then tries
-    /// to re-initialize those statics, which either panics outright
-    /// (multi_window event channel: "called twice") or silently leaves the
-    /// new gpui state observing stale callbacks bound to the previous
-    /// Activity.
-    ///
-    /// We've declared every config-change axis we care about in
-    /// AndroidManifest.xml (`android:configChanges="orientation|...|
-    /// uiMode|fontScale|..."`), so rotation, DeX, dark-mode flips, etc.
-    /// don't destroy the Activity in the first place — those keep the
-    /// process and Activity continuous, no re-entry. The only paths that
-    /// reach `onDestroy` are genuine teardowns: user closed the app,
-    /// system killed for memory, finishAndRemoveTask. For those, killing
-    /// the process here guarantees the next launch starts fresh with
-    /// zero stale static state.
+    /// Ends the process with the Activity. `android_main` and gpui_android's
+    /// statics start once per process: `singleTask` in the manifest keeps a
+    /// second instance from starting beside this one, and `configChanges` keeps
+    /// rotation, DeX and dark mode from recreating it. So what reaches here is a
+    /// real teardown (the user closed the app, or Android reclaimed it), and the
+    /// next launch starts fresh.
     override fun onDestroy() {
         Log.i(
             TAG,
             "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations — exiting process for clean restart",
         )
-        splashHandler.removeCallbacksAndMessages(null)
         dnsCallback?.let { callback ->
             getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
         }
@@ -1528,8 +760,7 @@ class MainActivity : GameActivity(), ImeHost {
         getSystemService(InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)
-        cursorOverlay?.release()
-        cursorOverlay = null
+        pointer.release()
         // A swiped-away task reaches here with the Rust side still alive:
         // end the children it spawned before the process goes, then drop
         // the runtime service so no orphan notification lingers.
@@ -1544,78 +775,23 @@ class MainActivity : GameActivity(), ImeHost {
     }
 
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray,
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_POST_NOTIFICATIONS) {
-            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-            Log.i(TAG_RUNTIME, "POST_NOTIFICATIONS granted=$granted")
-            return
-        }
-        if (requestCode != REQ_STORAGE_PERMS) {
-            return
-        }
-        val results = permissions.zip(grantResults.toTypedArray()).joinToString(",") { (perm, granted) ->
-            "${perm.removePrefix("android.permission.")}=${if (granted == PackageManager.PERMISSION_GRANTED) "OK" else "DENIED"}"
-        }
-        Log.i(TAG, "onRequestPermissionsResult: $results")
-    }
-
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_INSTALL_PERMISSION) {
             // The settings page always returns RESULT_CANCELED; ask again.
             NativeBridge.nativeOnInstallPermissionResult(packageManager.canRequestPackageInstalls())
-            return
         }
-        if (requestCode != REQ_OPEN_TREE && requestCode != REQ_CREATE_DOCUMENT) {
-            return
-        }
-        if (resultCode != Activity.RESULT_OK) {
-            Log.i(TAG, "picker cancelled (req=$requestCode resultCode=$resultCode)")
-            onPickerResult("")
-            return
-        }
-        val uri: Uri? = data?.data
-        if (uri != null) {
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (t: Throwable) {
-                Log.w(TAG, "takePersistableUriPermission failed", t)
-            }
-        }
-        onPickerResult(uri?.toString() ?: "")
     }
 
-    private external fun onPickerResult(uriString: String)
-
     companion object {
-        private const val TAG = "zed_android_saf"
-        private const val TAG_CAPTURE = "zed_android_capture"
+        private const val TAG = "zed_android_main"
         private const val TAG_UPDATE = "zed_android_update"
         private const val TAG_RUNTIME = "zed_android_runtime"
-        private const val REQ_OPEN_TREE = 0xA1
-        private const val REQ_CREATE_DOCUMENT = 0xA2
-        private const val REQ_STORAGE_PERMS = 0xA3
         private const val REQ_INSTALL_PERMISSION = 0xA4
         private const val REQ_POST_NOTIFICATIONS = 0xA5
         private const val PREFS = "zdroid"
         private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
-        /// Software cursor side length in dp. Scaled by display
-        /// density at instantiation time to give the sprite a
-        /// consistent visual size across devices.
-        private const val CURSOR_SIZE_DP = 24
-        /// Matches `captured_pointer::PRIMARY_WINDOW_ID` on the Rust
-        /// side. MainActivity always passes this when querying the
-        /// per-window hold-drag flag; spawned `ExtraWindowActivity`
-        /// instances pass their own `extraWindowId`.
+        /// Matches `captured_pointer::PRIMARY_WINDOW_ID` on the Rust side.
         const val PRIMARY_WINDOW_ID: Long = 0
     }
 }

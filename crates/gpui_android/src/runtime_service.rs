@@ -270,25 +270,13 @@ fn set_runtime_service(android_app: &AndroidApp, active: bool, keep_awake: bool)
 
 /// Whether the user already exempted the app from battery optimization.
 pub fn ignoring_battery_optimizations() -> Result<bool> {
-    let android_app = crate::updater::android_app()?;
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        Ok(env
-            .call_method(activity, "isIgnoringBatteryOptimizations", "()Z", &[])
-            .context("call MainActivity.isIgnoringBatteryOptimizations")?
-            .z()?)
-    })
+    crate::jni_env::call_main_activity_bool("isIgnoringBatteryOptimizations")
 }
 
 /// Open the system dialog that exempts the app from battery optimization.
 /// Returns `true` when the dialog opened or the exemption already holds.
 pub fn request_battery_exemption() -> Result<bool> {
-    let android_app = crate::updater::android_app()?;
-    crate::jni_env::with_activity(android_app, |env, activity| {
-        Ok(env
-            .call_method(activity, "requestIgnoreBatteryOptimizations", "()Z", &[])
-            .context("call MainActivity.requestIgnoreBatteryOptimizations")?
-            .z()?)
-    })
+    crate::jni_env::call_main_activity_bool("requestIgnoreBatteryOptimizations")
 }
 
 /// `MainActivity.onDestroy` calls this before it kills the process, so a

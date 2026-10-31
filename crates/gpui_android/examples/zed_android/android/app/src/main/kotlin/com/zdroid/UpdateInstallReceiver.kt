@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
-import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -90,11 +89,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             setActiveSessionId(context, sessionId)
             confirmation = null
             // Android adds the status extras, so the intent must stay mutable.
-            val mutable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_MUTABLE
-            } else {
-                0
-            }
+            val mutable = PendingIntent.FLAG_MUTABLE
             return PendingIntent.getBroadcast(
                 context,
                 sessionId,

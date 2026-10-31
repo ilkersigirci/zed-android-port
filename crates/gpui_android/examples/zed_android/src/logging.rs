@@ -95,8 +95,8 @@ fn open_log_file(workspace: &mut Workspace, window: &mut Window, cx: &mut Contex
     cx.spawn_in(window, async move |workspace, cx| {
         let log = {
             let result = futures::join!(
-                fs.load(&paths::old_log_file()),
-                fs.load(&paths::log_file()),
+                fs.load(paths::old_log_file()),
+                fs.load(paths::log_file()),
                 languages.language_for_name("log")
             );
             match result {

@@ -37,8 +37,8 @@ trackpad, in both tablet mode and DeX.
 | [~/storage curated symlinks](termux-storage-symlinks.md) | Active | Surface common /sdcard subdirs without making them workspace roots |
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
 | [Copy projects from shared storage](noexec-banner-move.md) | Active | When users open from /sdcard anyway, copy the project into ~/projects |
+| [Path prompts use Zed's own picker](path-prompts-use-zed-picker.md) | Active | Android's picker answers with content URIs, and Zed's features need paths |
 | [Trust grants restored from WorkspaceDb at boot](trust-restore-from-db.md) | Active | Production main.rs does this; we forgot |
-| [SAF picker integration](saf-picker-integration.md) | Active, opt-in | gpui's prompt_for_paths needs Android Storage Access Framework + path-decoding gymnastics; used only with `use_system_path_prompts: true` |
 
 ## Runtime engine
 
@@ -47,7 +47,8 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
-| [Storage permission JNI shim](storage-permission-jni.md) | Active | Raw `/sdcard` paths need the runtime grants on Android 8 to 10 and All files access on 11+ |
+| [Storage permission JNI shim](storage-permission-jni.md) | Active | Raw `/sdcard` paths need All files access |
+| [Remote development on Android](remote-development-on-android.md) | Active | Env, release channel and CDN gotchas of SSH projects |
 | [Rootfs engine integration](rootfs-engine-integration.md) | Active | How the editor reaches the Ubuntu rootfs: the loader link, the bundled image extracted on first launch, the symlink farm, the spawn bridge, reset |
 | [The guest environment contract](rootfs-guest-env.md) | Active | Editor keeps the host env, tools get the guest view at exec through `ZD_GUEST_ENV`; per-spawn PATH merge, terminal, SSH remotes |
 | [Two spellings of the app files dir](android-files-dir-spelling.md) | Active | At targetSdk 35 the kernel reports `/data/data/...` for the files dir; the engine gets that spelling, the editor keeps `/data/user/0` |
@@ -65,7 +66,6 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 |---|---|---|
 | [CA certificates](ssl-cert-bundle.md) | Active | The editor's HTTPS uses webpki-roots; the runtime's tools use Ubuntu's `ca-certificates` |
 | [.gitconfig safe.directory = *](gitconfig-safe-directory.md) | Active | The runtime's git sees every repository as another user's: the guest is root, the files the app's or media_rw's |
-| [Activity-recreation idempotency](activity-recreation-idempotency.md) | Active | `android_main` re-enters; everything must be re-entrant |
 | [SELinux context canary log](selinux-canary.md) | Active | Logs the app's SELinux domain at boot for reading spawn failures against it |
 | [MultiWorkspace wrapper + load keymap last](multiworkspace-keymap-order.md) | Active | Workspace KeyContext + boot-order rules make keybindings actually fire |
 | [Create worktree before attaching project panel](worktree-before-panel-attach.md) | Active | ProjectPanel::starts_open() needs the worktree present before add_panel runs |
@@ -74,9 +74,9 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
+| [Extra-window input parity](extra-window-input-parity.md) | Active | Hover, scroll and secondary buttons in windows without GameActivity's input queue |
 | [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with vsync callbacks, requested only while gpui has frames to draw |
 | [Two-finger tap → right click](two-finger-rightclick.md) | Active | Touchscreens don't have a right mouse button |
-| [JVM stack overflow on clipboard](jvm-clipboard-stack-overflow.md) | Active | Android's 988KB android_main thread can't handle clipboard JNI synchronously |
 | [first_mouse=false on Android touches](first-mouse-tagging.md) | Active | macOS-style first-click-focuses-the-window logic was no-op'ing every touch handler |
 | [UI mode → window appearance](ui-mode-system-appearance.md) | Active | Hardcoded Light made dark-mode-following themes always pick One Light |
 | [AssetSource threaded through gpui_android::run](assetsource-icons.md) | Active | Without it, every icon rendered as a blank rectangle |
@@ -99,8 +99,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Multi-Activity OS-chromed extra windows](multi-activity-os-chrome.md) | Active | Each `cx.open_window` past the first becomes a separate Activity task → OS provides freeform chrome on DeX/desktop windowing |
-| [`ZedApplication` for AppCompatActivity native lib load](zedapplication-loadlibrary.md) | Active | AppCompatActivity has no GameActivity meta-data hook → centralize `System.loadLibrary` in Application.onCreate |
-| [JNI ClassLoader for app classes](jni-classloader-for-app-classes.md) | Active | `Class.forName` only sees framework classes; Activity's loader sees app classes |
+| [Loading the native library](load-native-library.md) | Active | `NativeBridge` loads it on first use: `AppCompatActivity` doesn't, and `Application.onCreate` would also run for every documents provider query |
 | [JNI exception clear after error](jni-exception-clear-after-error.md) | Active | Pending Java exception from a failed JNI call aborts process on next JNI; must clear |
 | [`futures::oneshot::Receiver::try_recv` semantics](futures-oneshot-tryrecv-semantics.md) | Active | `Ok(None)` means "not ready", not "channel dropped" — easy off-by-semantic bug |
 | [Android 16 freeform configChanges (exhaustive)](android16-config-changes-resize.md) | Active | Drag-resize destroys Activity by default; declare every config to handle ourselves |
@@ -123,7 +122,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | [audio + livekit + call cfg-gates](android-cfg-gates.md) | Active | These crates don't compile against bionic; mock fallbacks already exist |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
-| [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off |
+| [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off. Armv9 cores shipped with Android 12, hence minSdk 31 |
 | [Loader in `nativeLibraryDir` via extractNativeLibs](extract-native-libs-loader.md) | Active | The engine loader is exec'd by path from the APK's lib dir; AGP 8 keeps libs un-extracted by default |
 
 ## Adding a new workaround

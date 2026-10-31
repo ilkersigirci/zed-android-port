@@ -1,9 +1,8 @@
 //! Pointer-capture event synthesis.
 //!
-//! When `MainActivity.kt` calls `decorView.requestPointerCapture()` and
-//! it succeeds, the trackpad delivers raw `MotionEvent`s to our
-//! `OnCapturedPointerListener` instead of being filtered through
-//! Android's gesture-detector layer. Captured events arrive tagged
+//! When `WindowPointer.kt` has pointer capture, the trackpad delivers raw
+//! `MotionEvent`s instead of being filtered through Android's gesture-detector
+//! layer. Captured events arrive tagged
 //! `SOURCE_TOUCHPAD` (not `SOURCE_MOUSE`) with full multi-touch state,
 //! per-pointer `AXIS_RELATIVE_X/Y` deltas, and clean
 //! `ACTION_BUTTON_PRESS` / `ACTION_BUTTON_RELEASE` framing.
@@ -58,48 +57,28 @@
 //!   text. Discriminates from scroll because scroll lands both fingers
 //!   near-simultaneously (hold-elapsed < threshold).
 //! - Move (both fingers landed near-simultaneously): scroll. The
-//!   centroid delta drives `ScrollDelta::Pixels`. Sign matches
-//!   `events/trackpad.rs` so behavior is consistent with the
-//!   non-captured trackpad path.
+//!   centroid delta drives `ScrollDelta::Pixels`.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use android_activity::input::MetaState;
 use futures::channel::mpsc;
 use gpui::{
-    GestureTuning, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, PlatformInput, Point, PointerFling, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
-    point, px,
+    GestureTuning, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    PlatformInput, Point, PointerFling, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point,
+    px,
 };
 use jni::objects::{JFloatArray, JObject};
 
-/// Java `MotionEvent.getActionMasked()` constants. Mirrors the ones in
-/// `events.rs` for the same JNI reason: `MotionAction` from the NDK
-/// crate has a private constructor.
-const JAVA_ACTION_DOWN: i32 = 0;
-const JAVA_ACTION_UP: i32 = 1;
-const JAVA_ACTION_MOVE: i32 = 2;
-const JAVA_ACTION_CANCEL: i32 = 3;
-const JAVA_ACTION_POINTER_DOWN: i32 = 5;
-const JAVA_ACTION_POINTER_UP: i32 = 6;
-const JAVA_ACTION_BUTTON_PRESS: i32 = 11;
-const JAVA_ACTION_BUTTON_RELEASE: i32 = 12;
-const JAVA_ACTION_SCROLL: i32 = 8;
-
-/// Mouse-wheel detents scroll one "line" each at the framework level
-/// (`AXIS_VSCROLL` is ~±1.0 per notch). The desktop default moves a few
-/// lines per notch; 3 keeps the wheel from feeling sluggish. Editor
-/// scales these by line height via `ScrollDelta::Lines`.
-const MOUSE_WHEEL_LINES_PER_NOTCH: f32 = 3.0;
-
-/// Android `MotionEvent.BUTTON_*` constants. Mirrors `events/mouse.rs`.
-const ANDROID_BUTTON_PRIMARY: i32 = 1 << 0;
-const ANDROID_BUTTON_SECONDARY: i32 = 1 << 1;
-const ANDROID_BUTTON_TERTIARY: i32 = 1 << 2;
-const ANDROID_BUTTON_BACK: i32 = 1 << 3;
-const ANDROID_BUTTON_FORWARD: i32 = 1 << 4;
+use crate::events::click_track::ClickTrackState;
+use crate::events::mouse::{self, button_from_state};
+use crate::events::{
+    JAVA_ACTION_BUTTON_PRESS, JAVA_ACTION_BUTTON_RELEASE, JAVA_ACTION_CANCEL, JAVA_ACTION_DOWN,
+    JAVA_ACTION_MOVE, JAVA_ACTION_POINTER_DOWN, JAVA_ACTION_POINTER_UP, JAVA_ACTION_SCROLL,
+    JAVA_ACTION_UP,
+};
 
 /// `InputDevice.SOURCE_TOUCHPAD` = SOURCE_CLASS_POSITION (0x8) plus
 /// the touchpad bit (0x100000). Used to source-filter BUTTON_PRESS /
@@ -227,7 +206,9 @@ static EVENT_TX: Mutex<Option<mpsc::UnboundedSender<CapturedEvent>>> = Mutex::ne
 static HOLD_DRAG_ACTIVE_PER_WINDOW: Mutex<Option<HashMap<u64, bool>>> = Mutex::new(None);
 
 fn set_hold_drag_active(window_id: u64, active: bool) {
-    let mut guard = HOLD_DRAG_ACTIVE_PER_WINDOW.lock().unwrap();
+    let mut guard = HOLD_DRAG_ACTIVE_PER_WINDOW
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     let map = guard.get_or_insert_with(HashMap::new);
     if active {
         map.insert(window_id, true);
@@ -245,13 +226,11 @@ fn is_hold_drag_active(window_id: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// Construct a fresh sender/receiver pair. Returns the receiver for
-/// the platform to drain; the sender lives in `EVENT_TX` for the JNI
-/// thread to push into. Safe to call multiple times (Activity-
-/// recreation idempotent) — each call drops the previous sender.
+/// Sets up the event channel and returns the receiver the platform's run
+/// loop drains; the sender lives in `EVENT_TX` for the JNI thread.
 pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<CapturedEvent> {
     let (tx, rx) = mpsc::unbounded();
-    *EVENT_TX.lock().unwrap() = Some(tx);
+    *EVENT_TX.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
     rx
 }
 
@@ -353,6 +332,9 @@ pub(crate) struct CapturedPointerState {
     /// cursor (e.g. `ACTION_BUTTON_RELEASE` may arrive without a
     /// fresh relative delta).
     last_cursor: Point<Pixels>,
+    /// The run of clicks, for double and triple clicks: taps on the trackpad and
+    /// a mouse's buttons, which all arrive here under capture.
+    clicks: ClickTrackState,
     /// The two-finger scroll's glide after the fingers lift, which Android
     /// leaves to the app. Created on the first scroll, with the platform's
     /// gesture tuning; the run loop advances it once per frame.
@@ -362,7 +344,7 @@ pub(crate) struct CapturedPointerState {
 /// Push a captured event from the JVM listener thread onto the channel.
 /// The game thread drains and synthesizes.
 fn dispatch(event: CapturedEvent) {
-    let guard = EVENT_TX.lock().unwrap();
+    let guard = EVENT_TX.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(tx) = guard.as_ref() else {
         log::warn!("captured_pointer: event arrived before init_event_channel");
         return;
@@ -809,18 +791,19 @@ pub(crate) fn translate(
                 && anchor.elapsed() < TAP_WINDOW
                 && state.motion_accum <= TAP_MOTION_PX
             {
+                let click_count = state.clicks.next_click_count(MouseButton::Left, cursor);
                 out.push(PlatformInput::MouseDown(MouseDownEvent {
                     button: MouseButton::Left,
                     position: cursor,
                     modifiers,
-                    click_count: 1,
+                    click_count,
                     first_mouse: false,
                 }));
                 out.push(PlatformInput::MouseUp(MouseUpEvent {
                     button: MouseButton::Left,
                     position: cursor,
                     modifiers,
-                    click_count: 1,
+                    click_count,
                 }));
                 // Record this tap so a subsequent ACTION_DOWN
                 // within `TAP_DRAG_WINDOW` can arm tap-tap-drag
@@ -906,11 +889,12 @@ pub(crate) fn translate(
                 let button = pressed_mouse_button.unwrap_or(MouseButton::Left);
                 state.button_held = Some(button);
                 state.primary_down = None;
+                let click_count = state.clicks.next_click_count(button, cursor);
                 out.push(PlatformInput::MouseDown(MouseDownEvent {
                     button,
                     position: cursor,
                     modifiers,
-                    click_count: 1,
+                    click_count,
                     first_mouse: false,
                 }));
             }
@@ -923,7 +907,7 @@ pub(crate) fn translate(
                     button,
                     position: cursor,
                     modifiers,
-                    click_count: 1,
+                    click_count: state.clicks.click_count(),
                 }));
             }
         }
@@ -934,17 +918,12 @@ pub(crate) fn translate(
             // did nothing. Emit a Lines-based Scroll event so the editor
             // scales by line height like the desktop discrete-wheel
             // path. Signs as in `events::mouse::wheel_scroll`.
-            let dx = -event.hscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
-            let dy = event.vscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
-            if dx != 0.0 || dy != 0.0 {
-                out.push(PlatformInput::Scroll(ScrollEvent {
-                    position: cursor,
-                    delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(dx, dy))),
-                    modifiers,
-                    touch_phase: TouchPhase::Moved,
-                    source: ScrollSource::Pointer,
-                }));
-            }
+            out.extend(mouse::wheel_scroll(
+                event.vscroll,
+                event.hscroll,
+                cursor,
+                modifiers,
+            ));
         }
         JAVA_ACTION_CANCEL => {
             if let Some(fling) = &mut state.fling {
@@ -977,30 +956,6 @@ pub(crate) fn translate(
     out
 }
 
-fn button_from_state(state: i32) -> Option<MouseButton> {
-    if state & ANDROID_BUTTON_PRIMARY != 0 {
-        Some(MouseButton::Left)
-    } else if state & ANDROID_BUTTON_TERTIARY != 0 {
-        Some(MouseButton::Middle)
-    } else if state & ANDROID_BUTTON_SECONDARY != 0 {
-        Some(MouseButton::Right)
-    } else if state & ANDROID_BUTTON_BACK != 0 {
-        Some(MouseButton::Navigate(NavigationDirection::Back))
-    } else if state & ANDROID_BUTTON_FORWARD != 0 {
-        Some(MouseButton::Navigate(NavigationDirection::Forward))
-    } else {
-        None
-    }
-}
-
-// JNI sinks --------------------------------------------------------------
-
-/// Kotlin queries this on every multi-touch MOVE to decide whether to
-/// move the on-screen cursor sprite. `true` while a hold-and-drag is
-/// in flight on the given window; `false` during plain scroll or
-/// single-finger gestures. Per-window so spawned windows have their
-/// own independent flag. Pass `0` (`PRIMARY_WINDOW_ID`) for
-/// MainActivity, the extra window's id for spawned windows.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_isHoldDragActive<'local>(
     _env: jni::JNIEnv<'local>,
@@ -1010,9 +965,8 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_isHoldDragActive<'local>(
     is_hold_drag_active(window_id as u64)
 }
 
-/// Sink for `NativeBridge.nativeOnCapturedPointer`, which Kotlin's
-/// `forwardCapturedPointer` calls for both MainActivity
-/// (`PRIMARY_WINDOW_ID`) and spawned `ExtraWindowActivity` windows.
+/// Sink for `NativeBridge.nativeOnCapturedPointer`, which `WindowPointer.kt`
+/// calls for the main window (`PRIMARY_WINDOW_ID`) and extra windows.
 /// Builds a `CapturedEvent` and queues it for the game thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'local>(
