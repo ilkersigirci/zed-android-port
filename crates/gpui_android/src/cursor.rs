@@ -1,18 +1,32 @@
 //! Bridge between gpui's `CursorStyle` and Android's `PointerIcon`. Each
 //! window's `ZdroidWindow.setCursorStyle` sets it on its decor view.
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use android_activity::AndroidApp;
 use gpui::CursorStyle;
 use jni::sys::jint;
+use util::ResultExt as _;
 
-/// The last `PointerIcon.TYPE_*` pushed, 0 for none: a window opened later gets
-/// it, and an unchanged style skips JNI. gpui resets the cursor style on every
-/// input event.
+/// `PointerIcon.TYPE_NULL`, which has no image.
+const TYPE_NULL: jint = 0;
+/// `PointerIcon.TYPE_DEFAULT`.
+const TYPE_DEFAULT: jint = 1000;
+
+/// The `PointerIcon.TYPE_*` of gpui's last style, 0 for none: an unchanged style
+/// skips JNI. gpui resets the cursor style on every input event.
 static LAST_STYLE_ICON_TYPE: AtomicI32 = AtomicI32::new(0);
 
+/// Whether the cursor is hidden until the pointer moves. Android's own fade on a
+/// key press needs an input connection, which `ImeHostView` refuses while a
+/// hardware keyboard is connected, and it wouldn't follow Zed's `hide_mouse`.
+static HIDDEN: AtomicBool = AtomicBool::new(false);
+
+/// What a window opened now should show.
 pub(crate) fn last_pushed_icon_type() -> Option<jint> {
+    if HIDDEN.load(Ordering::Acquire) {
+        return Some(TYPE_NULL);
+    }
     let value = LAST_STYLE_ICON_TYPE.load(Ordering::Acquire);
     if value == 0 { None } else { Some(value) }
 }
@@ -48,12 +62,34 @@ fn pointer_icon_type(style: CursorStyle) -> jint {
 
 pub(crate) fn set_pointer_icon(android_app: &AndroidApp, style: CursorStyle) {
     let icon_type = pointer_icon_type(style);
-    if LAST_STYLE_ICON_TYPE.swap(icon_type, Ordering::AcqRel) != icon_type {
-        crate::jni_env::call_all_windows(
-            android_app,
-            "setCursorStyle",
-            "(I)V",
-            &[icon_type.into()],
-        );
+    let changed = LAST_STYLE_ICON_TYPE.swap(icon_type, Ordering::AcqRel) != icon_type;
+    // A hidden cursor stays hidden, and shows this style when the pointer moves.
+    if changed && !HIDDEN.load(Ordering::Acquire) {
+        push_icon_type(android_app, icon_type);
     }
+}
+
+pub(crate) fn hide_until_pointer_moves(android_app: &AndroidApp) {
+    if !HIDDEN.swap(true, Ordering::AcqRel) {
+        push_icon_type(android_app, TYPE_NULL);
+    }
+}
+
+pub(crate) fn show_after_pointer_moved() {
+    if !HIDDEN.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    let Some(android_app) = crate::jni_env::android_app().log_err() else {
+        return;
+    };
+    let icon_type = last_pushed_icon_type().unwrap_or(TYPE_DEFAULT);
+    push_icon_type(android_app, icon_type);
+}
+
+pub(crate) fn is_visible() -> bool {
+    !HIDDEN.load(Ordering::Acquire)
+}
+
+fn push_icon_type(android_app: &AndroidApp, icon_type: jint) {
+    crate::jni_env::call_all_windows(android_app, "setCursorStyle", "(I)V", &[icon_type.into()]);
 }

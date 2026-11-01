@@ -1914,9 +1914,11 @@ impl Platform for AndroidPlatform {
     fn set_cursor_style(&self, style: CursorStyle) {
         crate::cursor::set_pointer_icon(&self.android_app, style);
     }
-    fn hide_cursor_until_mouse_moves(&self) {}
+    fn hide_cursor_until_mouse_moves(&self) {
+        crate::cursor::hide_until_pointer_moves(&self.android_app);
+    }
     fn is_cursor_visible(&self) -> bool {
-        true
+        crate::cursor::is_visible()
     }
     fn should_auto_hide_scrollbars(&self) -> bool {
         true

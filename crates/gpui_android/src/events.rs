@@ -157,6 +157,9 @@ pub(crate) fn translate_motion(
         };
     }
     let inputs = Vec::from_iter(mouse::translate(&motion, &mut state.mouse));
+    if matches!(inputs.first(), Some(PlatformInput::MouseMove(_))) {
+        crate::cursor::show_after_pointer_moved();
+    }
     TranslatedMotion {
         handled: !inputs.is_empty(),
         inputs,
