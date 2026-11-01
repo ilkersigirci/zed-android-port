@@ -26,7 +26,7 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
     private var surfaceView: SurfaceView? = null
 
     // No extras row here: its code-navigation keys are for the main editor.
-    override val ime: WindowIme by lazy { WindowIme(this, windowId, { surfaceView }) }
+    override val ime: WindowIme by lazy { WindowIme(this, windowId) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

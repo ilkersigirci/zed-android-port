@@ -1,7 +1,7 @@
 # Trackpads and mice go through Android's input stack
 
 **Status:** Active
-**Files:** `crates/gpui_android/src/events.rs`, `crates/gpui_android/src/events/mouse.rs`, `MotionEventExt.kt`, `MainActivity.kt` (`dispatchTouchEvent`), `WindowInsetsReporter.kt`
+**Files:** `crates/gpui_android/src/events.rs`, `crates/gpui_android/src/events/mouse.rs`, `MotionEventExt.kt`, `MainActivity.kt` (`dispatchTouchEvent`)
 
 ## What Android does
 
@@ -27,9 +27,9 @@ A two-finger swipe is a pointer scroll, which is what `ScrollSource::Pointer` do
 
 ## The gesture areas
 
-Android documents `WindowInsets.Type.mandatorySystemGestures()` as areas where system gestures have priority and "may consume some or all touch input", and its guidance is to keep interactive content out of them. So `WindowInsetsReporter` gives the surface margins of that size, and the window's background shows in the strips. Only Android's report sets them, so a window with no such areas has no margins.
+Zed's window fills the screen, including what Android reports as `WindowInsets.Type.mandatorySystemGestures()`, areas where system gestures have priority and "may consume some or all touch input". With the system bars hidden (One UI 8, tablet mode, 2026-11-01), these are 46 px at the top and 38 px at the bottom. Trackpad taps in the bottom one reached One UI's `TaskbarWindow`, not the app, and Zed's status bar lies inside it, so its buttons are hard to press.
 
-With the system bars hidden (One UI 8, tablet mode, 2026-11-01), these areas are 46 px at the top and 38 px at the bottom. Trackpad taps in the bottom one reached One UI's `TaskbarWindow`, not the app, and fingers often missed Zed's status bar there.
+Android's guidance is to keep interactive content out of these areas. A test build gave the surface margins of that size from `WindowInsetsReporter`, and the owner preferred a window that fills the screen to the strips that left (2026-11-01).
 
 ## One UI's differences
 

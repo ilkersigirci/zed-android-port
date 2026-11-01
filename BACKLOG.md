@@ -57,6 +57,7 @@ Not checked on the tablet:
 
 Considered and left as they are:
 
+- **The status bar's buttons are hard to press.** In fullscreen with gesture navigation on One UI, Android's mandatory gesture area is the bottom 38 px and the status bar lies inside it, so touches and clicks there go to One UI's `TaskbarWindow` rather than Zdroid. Keeping the window out of `mandatorySystemGestures` avoids it at the cost of strips at the screen's top and bottom. A test build of 0.13.0 did that, and the owner preferred a window that fills the screen (2026-11-01).
 - **A trackpad pinch does nothing.** gpui has `PinchEvent`, which the image viewer zooms with, and `translate_motion` could make one from `CLASSIFICATION_PINCH`'s two fake fingers. Nothing else in Zed uses it, and pinches never worked here.
 - **A second mouse button pressed while one is held does nothing.** Only `ACTION_DOWN` and `ACTION_UP` press and release a button in `events/mouse.rs`, which is all a chord would need `ACTION_BUTTON_PRESS` and `MotionEvent.getActionButton` for. Nothing in Zed uses chords.
 - **A long press doesn't vibrate.** Android's views call `performHapticFeedback(LONG_PRESS)` when a long press does something, so a drag starting from one would too. gpui has no call for it, and the reference tablet reports no vibrator capabilities and has touch feedback off, so it couldn't be felt or checked there.

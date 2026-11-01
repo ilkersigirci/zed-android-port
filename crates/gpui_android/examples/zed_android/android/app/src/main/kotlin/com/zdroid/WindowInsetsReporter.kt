@@ -2,12 +2,10 @@ package com.zdroid
 
 import android.util.Log
 import android.view.View
-import android.view.ViewGroup
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.updateLayoutParams
 
 /// Reports one window's insets to Rust through
 /// [NativeBridge.nativeOnWindowInsetsChanged], which lays gpui out above the
@@ -16,9 +14,6 @@ import androidx.core.view.updateLayoutParams
 /// While the keyboard slides, this reports every frame of the animation, so
 /// gpui's layout follows the keyboard's top edge.
 ///
-/// It also keeps [surface] out of Android's mandatory gesture areas, where the
-/// system may consume touches and clicks, so nothing interactive sits there.
-///
 /// [keyboardAccessoryHeight] is the height of a view the Activity floats on
 /// the keyboard's top edge (`MainActivity`'s programming extras row), or 0
 /// while none is shown; it counts as covered too. Call [refresh] when it
@@ -26,7 +21,6 @@ import androidx.core.view.updateLayoutParams
 /// changes, every frame while it slides, to move such a view with it.
 class WindowInsetsReporter(
     private val windowId: Long,
-    private val surface: () -> View?,
     private val keyboardAccessoryHeight: () -> Int = { 0 },
     private val onImeBottomChanged: (Int) -> Unit = {},
 ) {
@@ -34,12 +28,12 @@ class WindowInsetsReporter(
     var imeBottom: Int = 0
         private set
 
-    /// How far the keyboard and the view on it reach up from the surface's
+    /// How far the keyboard and the view on it reach up from the window's
     /// bottom edge, as last reported, in physical pixels.
-    private var obscuredBottom: Int = 0
+    var obscuredBottom: Int = 0
+        private set
 
     private var safeArea: Insets = Insets.NONE
-    private var surfaceMargins: Insets = Insets.NONE
     private var lastReported: IntArray? = null
 
     /// Set while a keyboard animation is prepared or running. Android
@@ -107,7 +101,6 @@ class WindowInsetsReporter(
     /// Returns whether the reported insets changed.
     private fun update(insets: WindowInsetsCompat, ime: Int): Boolean {
         safeArea = insets.getInsets(SAFE_AREA)
-        updateSurfaceMargins(insets.getInsets(MANDATORY_GESTURES))
         if (ime != imeBottom) {
             imeBottom = ime
             onImeBottomChanged(ime)
@@ -115,31 +108,19 @@ class WindowInsetsReporter(
         return report()
     }
 
-    private fun updateSurfaceMargins(margins: Insets) {
-        if (margins == surfaceMargins) return
-        val view = surface() ?: return
-        view.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-            setMargins(margins.left, margins.top, margins.right, margins.bottom)
-        }
-        surfaceMargins = margins
-    }
-
     private fun report(): Boolean {
-        // Rust measures both from the surface, which the margins moved in from the
-        // window's edges.
-        val safe = Insets.max(Insets.subtract(safeArea, surfaceMargins), Insets.NONE)
-        val obscured =
-            (imeBottom + keyboardAccessoryHeight() - surfaceMargins.bottom).coerceAtLeast(0)
-        val values = intArrayOf(safe.left, safe.top, safe.right, safe.bottom, obscured)
+        val obscured = imeBottom + keyboardAccessoryHeight()
+        val values =
+            intArrayOf(safeArea.left, safeArea.top, safeArea.right, safeArea.bottom, obscured)
         if (values.contentEquals(lastReported)) return false
         lastReported = values
         obscuredBottom = obscured
         NativeBridge.nativeOnWindowInsetsChanged(
             windowId,
-            safe.left,
-            safe.top,
-            safe.right,
-            safe.bottom,
+            safeArea.left,
+            safeArea.top,
+            safeArea.right,
+            safeArea.bottom,
             obscured,
         )
         return true
@@ -147,14 +128,13 @@ class WindowInsetsReporter(
 
     private fun describe(): String =
         "safe area (left, top, right, bottom)=(${safeArea.left}, ${safeArea.top}, " +
-            "${safeArea.right}, ${safeArea.bottom}) surface margins=$surfaceMargins " +
-            "ime bottom=$imeBottom obscured bottom=$obscuredBottom"
+            "${safeArea.right}, ${safeArea.bottom}) ime bottom=$imeBottom " +
+            "obscured bottom=$obscuredBottom"
 
     private companion object {
         const val TAG = "zdroid_insets"
         val IME = WindowInsetsCompat.Type.ime()
         val SAFE_AREA =
             WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-        val MANDATORY_GESTURES = WindowInsetsCompat.Type.mandatorySystemGestures()
     }
 }

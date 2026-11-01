@@ -2,7 +2,6 @@ package com.zdroid
 
 import android.app.Activity
 import android.util.Log
-import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import androidx.core.view.ViewCompat
@@ -21,7 +20,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 class WindowIme(
     private val activity: Activity,
     override val imeWindowId: Long,
-    surface: () -> View?,
     keyboardAccessoryHeight: () -> Int = { 0 },
     onImeBottomChanged: (Int) -> Unit = {},
     private val onVisibilityChanged: () -> Unit = {},
@@ -29,7 +27,7 @@ class WindowIme(
     private val clearPendingModifier: () -> Unit = {},
 ) : ImeHost {
     val insetsReporter =
-        WindowInsetsReporter(imeWindowId, surface, keyboardAccessoryHeight, onImeBottomChanged)
+        WindowInsetsReporter(imeWindowId, keyboardAccessoryHeight, onImeBottomChanged)
 
     /// Whether the keyboard is up, as the window's insets last said.
     var visible: Boolean = false

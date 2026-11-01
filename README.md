@@ -39,7 +39,6 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - A physical keyboard types what the layout in Android's settings says, including AltGr characters and dead keys, whose accent shows until the next key, and letters a US keyboard doesn't have still work in shortcuts.
 - Ctrl+click, Shift+click and Alt+click work with a mouse or trackpad, Ctrl+tap opens links, and horizontal wheel scrolling works.
 - A mouse and the Book Cover trackpad use Android's own pointer, gestures and settings, so pressing until the pad clicks and sliding drags, as with a mouse: selecting text, or moving tabs and project panel entries.
-- Zed's window stays out of the screen-edge areas where Android takes touches for its own gestures, so the status bar and the menu bar respond to fingers and clicks.
 - Samsung DeX: clicks and hover land under the pointer in freeform windows. Two-finger trackpad scrolls glide on after the fingers lift, as finger scrolls do.
 
 **Windows**

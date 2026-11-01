@@ -75,7 +75,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
     override val ime = WindowIme(
         this,
         PRIMARY_WINDOW_ID,
-        surface = { surfaceView() },
         // The row covers the window above the keyboard, so it counts as covered.
         keyboardAccessoryHeight = {
             extraKeysView?.takeIf { it.visibility == View.VISIBLE }?.height ?: 0
