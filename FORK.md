@@ -197,6 +197,8 @@ Pull requests from this repository build an APK signed with the release key, nam
 
 The same workflow checks formatting (`cargo fmt --all`, which covers the fork's edits to Zed's crates, plus `cargo fmt` in the app and in `askpass-helper`) and runs the host tests of those that build outside Android (`cargo test -p zdroid_hooks -p zdroid_runtime -p gpui_android`); a release waits for both. Every Cargo build in it, the helpers' included, uses `--locked`: update a lockfile in the pull request that needs it, not in CI.
 
+The workflow ignores pull requests and pushes that only change docs (`paths-ignore`). On a pull request GitHub checks that against the whole diff, so once one has code, a later docs commit builds the APK again. Put `[skip ci]` in the message of such a commit, the last one of the push: GitHub then starts no run, and a build already running carries on. Use it only on commits that change no code.
+
 1. Open the pull request's **Checks** tab, open the **Zdroid APK** run, and download the `zdroid-apk` artifact. GitHub delivers it as a `.zip`; unzip it to get the APK.
 2. Install it over the current release. Same package and key means it installs as an update and keeps your data.
 3. Keep `versionCode` in mind. Android refuses to install a lower `versionCode` over a higher one without uninstalling, which deletes the app's data. Bump the version in the pull request itself, so the test build and the release made from it share a `versionCode` and the release installs cleanly over the test build.
