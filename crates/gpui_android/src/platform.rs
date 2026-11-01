@@ -476,6 +476,10 @@ impl AndroidPlatform {
         *RUN_LOOP_WAKER
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(android_app.create_waker());
+        // GameActivity only keeps the axes an app asks for, and these are a mouse
+        // wheel's.
+        android_app.enable_motion_axis(android_activity::input::Axis::Vscroll);
+        android_app.enable_motion_axis(android_activity::input::Axis::Hscroll);
         let common = AndroidCommon::new(&android_app);
         Self {
             common: RefCell::new(common),
