@@ -27,7 +27,7 @@ A two-finger swipe is a pointer scroll, which is what `ScrollSource::Pointer` do
 
 ## The gesture areas
 
-Zed's window fills the screen, including what Android reports as `WindowInsets.Type.mandatorySystemGestures()`, areas where system gestures have priority and "may consume some or all touch input". With the system bars hidden (One UI 8, tablet mode, 2026-11-01), these are 46 px at the top and 38 px at the bottom. Trackpad taps in the bottom one reached One UI's `TaskbarWindow`, not the app, and Zed's status bar lies inside it, so its buttons are hard to press.
+Zed's window fills the screen, including what Android reports as `WindowInsets.Type.mandatorySystemGestures()`, areas where system gestures have priority and "may consume some or all touch input". With the system bars hidden (One UI 8, tablet mode, 2026-11-01), these are 46 px at the top and 38 px at the bottom. Zed's status bar lies inside the bottom one, so its buttons are hard to press. A finger's press in that area reaches the window but presses nothing, which leaves the one pixel row above it. A mouse's or trackpad's press works down to about 28 px from the bottom, the buttons' top 10 px or so, and below that goes to One UI's `TaskbarWindow`. The top area doesn't get in the way: the menu bar and the title bar's button inside it took presses from all three.
 
 Android's guidance is to keep interactive content out of these areas. A test build gave the surface margins of that size from `WindowInsetsReporter`, and the owner preferred a window that fills the screen to the strips that left (2026-11-01).
 
