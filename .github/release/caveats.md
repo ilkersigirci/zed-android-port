@@ -5,12 +5,11 @@
 - Zed's path picker takes one path at a time, so the agent's **Add Images** attaches one image per pick.
 - Android stops child processes past 32 across all apps. On Android 14 and later, **Developer options → Disable child process restrictions** lifts the limit.
 - The runtime has no System V IPC, so PostgreSQL doesn't start in it.
-- With a mouse or trackpad connected, the pointer can't reach the buttons in a pop-up window's title bar: Zdroid captures the pointer for trackpad gestures. Close the Settings window with Ctrl+W, minimize it with Ctrl+M, close other Zdroid windows with Ctrl+Shift+W, or tap the buttons.
 - Language servers, terminals and SSH sessions keep running in the background while they exist. For work without them, such as Zed's own agent, turn on **Zdroid → Keep Running in Background**. On Samsung devices, also set **Settings → Apps → Zdroid → Battery** to **Unrestricted**, or use **Settings → Android → Allow Background Activity**.
-- A separate Bluetooth or USB trackpad (not the Samsung Book Cover) may move rotated in landscape. Mice are unaffected.
+- A trackpad follows Android's settings for pointer speed, tap to click and scrolling direction. Tap, touch again and slide to drag needs Android's tap dragging, which is off by default: turn it on with `adb shell settings put system touchpad_tap_dragging 1`, or press until the pad clicks and slide instead. Two-finger scrolling needs Android 14 or later: Android 12 and 13 don't report it as a scroll.
+- On One UI with gesture navigation, Android's gesture area covers the status bar: a finger can't press its buttons, and a mouse or trackpad only reaches their top edge. Use the command palette.
 - A keyboard with a built-in touchpad that Android reports as one device isn't recognized as a keyboard: the keyboard button stays in the status bar, and tapping text can show the on-screen keyboard.
 - **Reveal in File Manager** opens the folder in Android's Files app without selecting the file, since Android has no way to do that. **Reveal in File Manager** and **Open in Default App** work for your home folder and shared storage.
-- On One UI with gesture navigation, the status bar's buttons are hard to press with a finger, because Android's gesture area covers them. Use a mouse or trackpad, or the command palette.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints). Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
 - In the terminal, run Codex as `codex --no-daemon`: its background server sandboxes itself with bubblewrap, which Android doesn't allow in an app.
 - Google Antigravity's agent runs on SSH remotes but not locally, where it stops with a tcmalloc out-of-memory error. Its memory allocator needs a 48-bit address space, and Android kernels built for 39-bit addresses, such as the Galaxy Tab S9 Ultra's, don't have one.

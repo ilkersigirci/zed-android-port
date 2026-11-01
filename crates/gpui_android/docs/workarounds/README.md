@@ -76,6 +76,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 |---|---|---|
 | [Extra-window input parity](extra-window-input-parity.md) | Active | Hover, scroll and secondary buttons in windows without GameActivity's input queue |
 | [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with vsync callbacks, requested only while gpui has frames to draw |
+| [Trackpads and mice go through Android's input stack](touchpad-input.md) | Active | What Android reports for a trackpad, and why Zdroid doesn't capture the pointer |
 | [Two-finger tap → right click](two-finger-rightclick.md) | Active | Touchscreens don't have a right mouse button |
 | [first_mouse=false on Android touches](first-mouse-tagging.md) | Active | macOS-style first-click-focuses-the-window logic was no-op'ing every touch handler |
 | [UI mode → window appearance](ui-mode-system-appearance.md) | Active | Hardcoded Light made dark-mode-following themes always pick One Light |

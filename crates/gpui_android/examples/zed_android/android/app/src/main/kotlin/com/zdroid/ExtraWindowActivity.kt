@@ -1,11 +1,9 @@
 package com.zdroid
 
 import android.app.ActivityManager
-import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.appcompat.app.AppCompatActivity
@@ -29,15 +27,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
 
     // No extras row here: its code-navigation keys are for the main editor.
     override val ime: WindowIme by lazy { WindowIme(this, windowId) }
-
-    override val pointer: WindowPointer by lazy {
-        WindowPointer(
-            this,
-            windowId,
-            surfaceView = { surfaceView },
-            obscuredBottom = { ime.insetsReporter.obscuredBottom },
-        )
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,7 +55,7 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
         NativeBridge.nativeOnExtraActivityCreated(windowId, this)
 
         val id = windowId
-        val surface = ScrollableSurfaceView(this).apply {
+        val surface = SurfaceView(this).apply {
             // Opaque, so the compositor ignores the alpha in wgpu's output.
             // With RGBA_8888, gpui's anti-aliased text edges and transparent
             // regions let the window background through as a whitish tint.
@@ -74,24 +63,19 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
             holder.addCallback(SurfaceCallback(id))
             // Returning true keeps the gesture from the OS chrome's drag handle.
             setOnTouchListener { _, event ->
-                forwardTouchEvent(id, event)
+                event.forwardTo(id)
                 true
             }
             // Hover (a mouse moving with no button pressed) arrives here, not
             // through the touch listener.
             setOnHoverListener { _, event ->
-                forwardTouchEvent(id, event)
+                event.forwardTo(id)
                 true
             }
-            // Wheel and trackpad scrolls. Captured events return false, to
-            // reach the Activity's `onGenericMotionEvent`.
+            // The mouse wheel.
             setOnGenericMotionListener { _, event ->
-                if (pointer.isCaptured(event)) {
-                    false
-                } else {
-                    forwardTouchEvent(id, event)
-                    true
-                }
+                event.forwardTo(id)
+                true
             }
             isFocusable = true
             isFocusableInTouchMode = true
@@ -103,7 +87,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
         surfaceView = surface
         setContentView(surface)
         ime.install()
-        pointer.install()
     }
 
     /// Called by Rust (`multi_window::set_extra_activity_title`) from the
@@ -132,9 +115,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy windowId=$windowId")
-        if (windowId >= 0L && surfaceView != null) {
-            pointer.release()
-        }
         if (windowId >= 0L) {
             NativeBridge.nativeOnExtraActivityDestroyed(windowId)
         }
@@ -145,23 +125,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
         super.onWindowFocusChanged(hasFocus)
         if (surfaceView == null) return
         NativeBridge.nativeOnExtraFocusChanged(windowId, hasFocus)
-        pointer.onWindowFocusChanged(hasFocus)
-    }
-
-    override fun onPointerCaptureChanged(hasCapture: Boolean) {
-        super.onPointerCaptureChanged(hasCapture)
-        if (surfaceView != null) pointer.onPointerCaptureChanged(hasCapture)
-    }
-
-    override fun onTrackballEvent(event: MotionEvent): Boolean =
-        pointer.onTrackballEvent(event) || super.onTrackballEvent(event)
-
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean =
-        pointer.onGenericMotionEvent(event) || super.onGenericMotionEvent(event)
-
-    override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
-        event?.let(pointer::onTouchDispatched)
-        return super.dispatchTouchEvent(event)
     }
 
     /// Key events go to gpui here: this Activity has no GameActivity input
@@ -169,7 +132,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
     /// They're claimed so that Android's fallback routing doesn't also act on
     /// them.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        pointer.onKeyDispatched(event)
         if (windowId >= 0L && !isSystemKey(event.keyCode)) {
             NativeBridge.nativeOnExtraKeyEvent(
                 windowId,
@@ -200,7 +162,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
         override fun surfaceCreated(holder: SurfaceHolder) {
             Log.i(TAG, "surfaceCreated windowId=$id")
             NativeBridge.nativeOnExtraSurfaceCreated(id, holder.surface)
-            pointer.onSurfaceCreated()
         }
 
         override fun surfaceChanged(
@@ -219,51 +180,8 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
         }
     }
 
-    private fun forwardTouchEvent(id: Long, event: MotionEvent) {
-        val pointerCount = event.pointerCount
-        if (pointerCount <= 0) return
-        val xs = FloatArray(pointerCount)
-        val ys = FloatArray(pointerCount)
-        val ids = IntArray(pointerCount)
-        val toolTypes = IntArray(pointerCount)
-        for (i in 0 until pointerCount) {
-            xs[i] = event.getX(i)
-            ys[i] = event.getY(i)
-            ids[i] = event.getPointerId(i)
-            toolTypes[i] = event.getToolType(i)
-        }
-        // ACTION_SCROLL (mouse wheel + trackpad two-finger scroll) carries
-        // its delta on the AXIS_VSCROLL / AXIS_HSCROLL axes — getX/Y return
-        // the pointer position, not the scroll amount. Read both axes
-        // unconditionally; they're zero on non-scroll events and the Rust
-        // translator only consumes them under the Scroll action arm.
-        val vscroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hscroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        NativeBridge.nativeOnExtraTouchEvent(
-            id,
-            event.actionMasked,
-            event.actionIndex,
-            event.metaState,
-            event.flags,
-            vscroll,
-            hscroll,
-            xs,
-            ys,
-            ids,
-            toolTypes,
-        )
-    }
-
     companion object {
         private const val TAG = "zed_android_extra"
         const val EXTRA_WINDOW_ID = "com.zdroid.window_id"
     }
-}
-
-/// Without capture, Android asks the view under the pointer whether it can
-/// scroll before turning a trackpad's two-finger swipe into `ACTION_SCROLL`. A
-/// bare `SurfaceView` says no, and the swipe arrives as a click and drag.
-private class ScrollableSurfaceView(context: Context) : SurfaceView(context) {
-    override fun canScrollVertically(direction: Int): Boolean = true
-    override fun canScrollHorizontally(direction: Int): Boolean = true
 }

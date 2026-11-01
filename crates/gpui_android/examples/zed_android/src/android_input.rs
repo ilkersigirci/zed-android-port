@@ -1,7 +1,6 @@
-//! Android input: the `android_input` settings, their status bar buttons
-//! (show or hide the on-screen keyboard, switch the screen between direct
-//! touch and a virtual trackpad) and their onboarding section, and keeping
-//! the cursor above the on-screen keyboard.
+//! Android input: the `android_input` settings, the status bar button that shows
+//! or hides the on-screen keyboard, their onboarding section, and keeping the
+//! cursor above the on-screen keyboard.
 
 use editor::{Editor, scroll::Autoscroll};
 use fs::Fs;
@@ -18,8 +17,6 @@ use workspace::{HideStatusItem, ItemHandle, StatusItemView};
 #[derive(RegisterSetting)]
 pub struct AndroidInputSettings {
     pub on_screen_keyboard: bool,
-    pub trackpad_mode: bool,
-    pub trackpad_mode_active: bool,
     pub programming_extras_row: bool,
     pub invert_scroll: bool,
 }
@@ -29,8 +26,6 @@ impl Settings for AndroidInputSettings {
         let android_input = content.android_input.clone().unwrap_or_default();
         AndroidInputSettings {
             on_screen_keyboard: android_input.on_screen_keyboard.unwrap_or(true),
-            trackpad_mode: android_input.trackpad_mode.unwrap_or(false),
-            trackpad_mode_active: android_input.trackpad_mode_active.unwrap_or(false),
             programming_extras_row: android_input.programming_extras_row.unwrap_or(false),
             invert_scroll: android_input.invert_scroll.unwrap_or(false),
         }
@@ -45,8 +40,6 @@ pub fn set_default_settings(cx: &mut App) {
         store.update_default_settings(cx, |defaults| {
             defaults.android_input = Some(AndroidInputSettingsContent {
                 on_screen_keyboard: Some(true),
-                trackpad_mode: Some(false),
-                trackpad_mode_active: Some(false),
                 programming_extras_row: Some(false),
                 invert_scroll: Some(false),
             });
@@ -105,14 +98,6 @@ pub fn render_onboarding_section(tab_index: &mut isize, cx: &mut App) -> AnyElem
             "Programming Keys Row",
             settings.programming_extras_row,
             |content, value| content.programming_extras_row = Some(value),
-            tab_index,
-        ),
-        onboarding_row(
-            "onboarding-android-trackpad-mode",
-            IconName::Crosshair,
-            "Virtual Trackpad",
-            settings.trackpad_mode,
-            |content, value| content.trackpad_mode = Some(value),
             tab_index,
         ),
     ];
@@ -214,59 +199,6 @@ impl StatusItemView for SoftKeyboardButton {
     }
 
     // Shown only while `android_input.on_screen_keyboard` is on.
-    fn hide_setting(&self, _cx: &App) -> Option<HideStatusItem> {
-        None
-    }
-}
-
-pub struct TrackpadModeButton {
-    _settings_subscription: Subscription,
-}
-
-impl TrackpadModeButton {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        Self {
-            _settings_subscription: cx.observe_global::<SettingsStore>(|_, cx| cx.notify()),
-        }
-    }
-}
-
-impl Render for TrackpadModeButton {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let android_input = AndroidInputSettings::get_global(cx);
-        if !android_input.trackpad_mode {
-            return div().into_any_element();
-        }
-        let trackpad_active = android_input.trackpad_mode_active;
-        IconButton::new("toggle_trackpad_mode", IconName::Crosshair)
-            .icon_size(IconSize::Small)
-            .toggle_state(trackpad_active)
-            .on_click(|_, _, cx| {
-                settings::update_settings_file(<dyn Fs>::global(cx), cx, |content, _| {
-                    let android_input = content.android_input.get_or_insert_default();
-                    let active = android_input.trackpad_mode_active.unwrap_or(false);
-                    android_input.trackpad_mode_active = Some(!active);
-                });
-            })
-            .tooltip(Tooltip::text(if trackpad_active {
-                "Disable Trackpad Mode"
-            } else {
-                "Enable Trackpad Mode (virtual mouse)"
-            }))
-            .into_any_element()
-    }
-}
-
-impl StatusItemView for TrackpadModeButton {
-    fn set_active_pane_item(
-        &mut self,
-        _active_pane_item: Option<&dyn ItemHandle>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-    }
-
-    // Shown only while `android_input.trackpad_mode` is on.
     fn hide_setting(&self, _cx: &App) -> Option<HideStatusItem> {
         None
     }

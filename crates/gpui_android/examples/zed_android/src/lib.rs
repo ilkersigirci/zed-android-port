@@ -833,8 +833,6 @@ fn boot(
     let push_android_input_atomics = |cx: &gpui::App| {
         let android_input = android_input::AndroidInputSettings::get_global(cx);
         gpui_android::set_on_screen_keyboard_enabled(android_input.on_screen_keyboard);
-        let trackpad_active = android_input.trackpad_mode && android_input.trackpad_mode_active;
-        gpui_android::set_trackpad_mode_enabled(trackpad_active);
         gpui_android::set_programming_extras_row_enabled(android_input.programming_extras_row);
         gpui_android::set_invert_scroll(android_input.invert_scroll);
     };
@@ -1135,10 +1133,8 @@ fn boot(
         workspace.set_titlebar_item(header.into(), window, cx);
 
         let soft_keyboard_button = cx.new(android_input::SoftKeyboardButton::new);
-        let trackpad_mode_button = cx.new(android_input::TrackpadModeButton::new);
         workspace.status_bar().update(cx, |status_bar, cx| {
             status_bar.add_right_item(soft_keyboard_button, window, cx);
-            status_bar.add_right_item(trackpad_mode_button, window, cx);
         });
     })
     .detach();

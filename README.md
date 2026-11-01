@@ -38,8 +38,8 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Long press in the terminal opens its context menu, with **Open in Browser** for a selected link.
 - A physical keyboard types what the layout in Android's settings says, including AltGr characters and dead keys, whose accent shows until the next key, and letters a US keyboard doesn't have still work in shortcuts.
 - Ctrl+click, Shift+click and Alt+click work with a mouse or trackpad, Ctrl+tap opens links, and horizontal wheel scrolling works.
-- On the Book Cover trackpad, pressing until it clicks and sliding drags, as with a mouse: selecting text, or moving tabs and project panel entries.
-- Samsung DeX: clicks and hover land under the pointer in freeform windows. The Book Cover trackpad follows your finger in landscape, and its two-finger scrolls glide on after the fingers lift, as finger scrolls do.
+- A mouse and the Book Cover trackpad use Android's own pointer, gestures and settings, so pressing until the pad clicks and sliding drags, as with a mouse: selecting text, or moving tabs and project panel entries.
+- Samsung DeX: clicks and hover land under the pointer in freeform windows. Two-finger trackpad scrolls glide on after the fingers lift, as finger scrolls do.
 
 **Windows**
 
@@ -176,18 +176,11 @@ Each surface toggles in **Settings → Android** (or on the first-run onboarding
 - **Long-press and drag** on a tab or a project panel entry moves it
 - **Scrollbar tap and drag** snaps the thumb to your finger and follows
 
-### Virtual trackpad mode
-Toggle the crosshair icon in the tab bar to turn touch into a pointer. Direct touch is disabled while it's on.
-- **One-finger drag** moves the cursor
-- **Tap** for left click, **two-finger tap** for right click
-- **Hold then drag** for text selection
-- **Two-finger drag** to scroll the content
-
 ### Hardware mouse / trackpad
-Plug in or pair a mouse, trackpad, or Book Cover Keyboard and it just works.
+Plug in or pair a mouse, trackpad, or Book Cover Keyboard and it just works, with Android's pointer, pointer speed and tap to click.
 - **Scroll wheel** and **two-finger trackpad scroll** to scroll
-- **Right-click** anywhere for context menus
-- The cursor hides when you switch to touch or typing and comes back on the next pointer event
+- **Right-click** or **two-finger tap** anywhere for context menus
+- **Press until the pad clicks and slide** to drag. **Tap, touch again and slide** does too, once Android's tap dragging is on: `adb shell settings put system touchpad_tap_dragging 1`
 
 > Working on Samsung tablets and most Android devices we've tested. If your mouse pairs but doesn't move the cursor (seen on some OnePlus / Oppo Pad ColorOS builds), [open an issue](https://github.com/Dylanmurzello/zed-android-port/issues/new) with `adb shell dumpsys input` output so we can triage.
 

@@ -85,15 +85,18 @@ object NativeBridge {
     /// `MotionEvent` across the JNI boundary). Pointer indices are
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the
     /// `MotionEvent.AXIS_VSCROLL`/`AXIS_HSCROLL` values for `ACTION_SCROLL`
-    /// events (mouse wheel, trackpad two-finger scroll); zero on touch /
-    /// hover / button events. `flags` is `MotionEvent.getFlags()` and
+    /// events (the mouse wheel); zero on touch / hover / button events. `source`,
+    /// `buttonState`, `flags` and `classification` are `MotionEvent`'s, and
     /// `toolTypes` each pointer's `MotionEvent.getToolType`.
-    external fun nativeOnExtraTouchEvent(
+    external fun nativeOnMotionEvent(
         windowId: Long,
         actionMasked: Int,
         actionIndex: Int,
+        source: Int,
+        buttonState: Int,
         metaState: Int,
         flags: Int,
+        classification: Int,
         vscroll: Float,
         hscroll: Float,
         xs: FloatArray,
@@ -121,36 +124,6 @@ object NativeBridge {
         keyCode: Int,
         metaState: Int,
         repeatCount: Int,
-    )
-
-    /// True while a hold-and-drag gesture is in flight on the given
-    /// window's Rust-side state machine. Kotlin queries on every
-    /// multi-touch MOVE event to decide whether the on-screen cursor
-    /// sprite should follow the moving finger. Per-window because
-    /// each spawned `ExtraWindowActivity` has its own gesture state;
-    /// pass `0` for `MainActivity` (the primary window) and the
-    /// extra window's id for spawned windows.
-    external fun isHoldDragActive(windowId: Long): Boolean
-
-    /// Captured-pointer sink, called only by [WindowPointer].
-    /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
-    /// window's id. `rxs`/`rys` are `AXIS_RELATIVE_X` /
-    /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
-    /// motion and scroll synthesis). `vscroll`/`hscroll` carry a
-    /// mouse wheel's `ACTION_SCROLL`.
-    external fun nativeOnCapturedPointer(
-        windowId: Long,
-        actionMasked: Int,
-        source: Int,
-        buttonState: Int,
-        metaState: Int,
-        pointerCount: Int,
-        rxs: FloatArray,
-        rys: FloatArray,
-        vscroll: Float,
-        hscroll: Float,
-        cursorPhysicalX: Float,
-        cursorPhysicalY: Float,
     )
 
     /// IME `commitText` from `ZdroidInputConnection`. Final text the

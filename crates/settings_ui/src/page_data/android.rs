@@ -149,31 +149,8 @@ pub(super) fn android_page() -> SettingsPage {
             }),
             SettingsPageItem::SectionHeader("Trackpad and Mouse"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Virtual Trackpad",
-                description: "Add a status bar button that turns the screen into a trackpad: drag moves the pointer, tap clicks, two-finger tap right-clicks and two-finger drag scrolls. Tapping the button again restores direct touch.",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("android_input.trackpad_mode"),
-                    pick: |settings_content| {
-                        settings_content
-                            .android_input
-                            .as_ref()?
-                            .trackpad_mode
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .android_input
-                            .get_or_insert_default()
-                            .trackpad_mode = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
                 title: "Invert Scroll Direction",
-                description: "Reverse the scroll direction of trackpads, the mouse wheel and the virtual trackpad. Scrolling with a finger isn't affected.",
+                description: "Reverse the scroll direction of trackpads and the mouse wheel. Scrolling with a finger isn't affected.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.invert_scroll"),

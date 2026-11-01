@@ -3,7 +3,6 @@
 
 pub mod askpass_install;
 pub mod background_mode;
-mod captured_pointer;
 mod clipboard;
 mod credentials;
 mod cursor;
@@ -55,16 +54,6 @@ pub fn set_on_screen_keyboard_enabled(enabled: bool) {
     ime::ON_SCREEN_KEYBOARD_ENABLED.store(enabled, std::sync::atomic::Ordering::Release);
 }
 
-/// Push the user's effective trackpad-mode state (master AND active)
-/// into the runtime atomic the touch dispatcher reads to decide
-/// whether each touch event routes to the virtual-trackpad SM. Same
-/// rationale as [`set_on_screen_keyboard_enabled`]: must work
-/// independent of pane render so the gate is correct before any
-/// project is opened.
-pub fn set_trackpad_mode_enabled(enabled: bool) {
-    ime::TRACKPAD_MODE_ENABLED.store(enabled, std::sync::atomic::Ordering::Release);
-}
-
 /// Push the user's `android_input.programming_extras_row` setting
 /// to the runtime atomic. The platform reconcile loop forwards
 /// changes to Kotlin's `Activity.setProgrammingExtrasRowEnabled` so
@@ -81,9 +70,8 @@ pub(crate) fn programming_extras_row_enabled() -> bool {
 }
 
 /// Push the user's `android_input.invert_scroll` setting to the runtime
-/// atomic read by the captured-pointer synthesizer (trackpad two-finger
-/// scroll + mouse wheel) and the virtual-trackpad SM. Same independent-
-/// of-pane-render rationale as the others.
+/// atomic that trackpad scrolls and the mouse wheel read. Same
+/// independent-of-pane-render rationale as the others.
 pub fn set_invert_scroll(enabled: bool) {
     ime::INVERT_SCROLL.store(enabled, std::sync::atomic::Ordering::Release);
 }

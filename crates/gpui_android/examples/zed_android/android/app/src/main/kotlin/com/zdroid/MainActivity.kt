@@ -33,7 +33,6 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyCharacterMap
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
@@ -88,13 +87,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
         onVisibilityChanged = { updateExtrasRowVisibility() },
         modifierState = { extraKeysPendingMeta or extraKeysLockedMeta },
         clearPendingModifier = { extraKeysView?.consumePendingModifier() },
-    )
-
-    override val pointer = WindowPointer(
-        this,
-        PRIMARY_WINDOW_ID,
-        surfaceView = { surfaceView() },
-        obscuredBottom = { ime.insetsReporter.obscuredBottom },
     )
 
     /// GameActivity's surface. It's looked up once: touch and hover events
@@ -197,7 +189,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
         }
         enterEdgeToEdge()
         ime.install()
-        pointer.install()
         getSystemService(InputManager::class.java)
             ?.registerInputDeviceListener(inputDeviceListener, null)
         contentResolver.registerContentObserver(
@@ -256,25 +247,21 @@ class MainActivity : GameActivity(), ZdroidWindow {
             .start()
     }
 
-    override fun onTrackballEvent(event: MotionEvent): Boolean =
-        pointer.onTrackballEvent(event) || super.onTrackballEvent(event)
-
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (pointer.onGenericMotionEvent(event)) return true
-        // Captured events above carry relative motion; only absolute hover and
-        // scroll positions are moved into surface space.
         offsetEventToSurface(event)
         return super.onGenericMotionEvent(event)
     }
 
+    /// A trackpad's gestures are fake fingers to Android. They go to Rust with
+    /// their classification, which GameActivity's events don't carry, before any
+    /// view can take them for touches.
     override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
-        event?.let(pointer::onTouchDispatched)
+        if (event?.isTrackpadGesture == true) {
+            offsetEventToSurface(event)
+            event.forwardTo(PRIMARY_WINDOW_ID)
+            return true
+        }
         return super.dispatchTouchEvent(event)
-    }
-
-    override fun onPointerCaptureChanged(hasCapture: Boolean) {
-        super.onPointerCaptureChanged(hasCapture)
-        pointer.onPointerCaptureChanged(hasCapture)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -306,11 +293,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
         }
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        pointer.onKeyDispatched(event)
-        return super.dispatchKeyEvent(event)
-    }
-
     /// A file another app opened while Zdroid runs (`OpenFileActivity`).
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -322,11 +304,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
         // The setting may have changed while the system's settings were in
         // front, in case the observer didn't fire.
         refreshPhysicalKeyboard()
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        pointer.onWindowFocusChanged(hasFocus)
     }
 
     /// Starts the Activity that hosts an extra gpui window, with `bounds` as
@@ -905,7 +882,6 @@ class MainActivity : GameActivity(), ZdroidWindow {
         getSystemService(InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)
-        pointer.release()
         // A swiped-away task reaches here with the Rust side still alive:
         // end the children it spawned before the process goes, then drop
         // the runtime service so no orphan notification lingers.
@@ -939,7 +915,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         private const val CLIPBOARD_IMAGE_MAX_BYTES = 32 * 1024 * 1024
         private const val PREFS = "zdroid"
         private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
-        /// Matches `captured_pointer::PRIMARY_WINDOW_ID` on the Rust side.
+        /// Matches `insets::PRIMARY_WINDOW_ID` on the Rust side.
         const val PRIMARY_WINDOW_ID: Long = 0
     }
 }

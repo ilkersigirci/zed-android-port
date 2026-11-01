@@ -51,47 +51,6 @@ without CPU compositing.
   120 lines/sec of log spam. Real frame-pacing tail (p99=20ms+) comes from occasional
   long paints, not wakes.
 
-## I/O integration started (2026-05-13)
-
-Separate concern from the render-pipeline items above, but landed in
-the same session because the user explicitly tied the work together
-("then we begin working on the I/O integration"). Scope: hardware
-mouse / stylus / trackpad should feel desktop-class, not VNC-tier.
-
-- **Source segregation** (`crates/gpui_android/src/events/source.rs`):
-  New `InputSource` enum (Mouse / Stylus / Touchpad / Finger) and a
-  `classify(event: &MotionEvent)` function that reads per-pointer
-  `tool_type` first, falls back to the device `source()` bitmask.
-  Wired into the primary `translate_motion_event`. Extra-window
-  translator (Settings / Keymap / Themes) defaults to Finger because
-  the JNI bridge doesn't yet pass source / tool_type — plumb that
-  through `forwardTouchEvent` + `nativeOnExtraTouchEvent` when the
-  feel gap hits an extra window.
-- **Per-source multi-click windows** (`events/touch.rs`): The 500ms /
-  6px constants are now `multi_click_window(source)` and
-  `multi_click_slop(source)` helpers in `events/source.rs`. Hardware
-  pointers (mouse / stylus / trackpad) get 300ms / 3px to match
-  `ViewConfiguration.getDoubleTapTimeout()`; finger taps keep 500ms /
-  6px. Double-click in the editor on a hardware mouse should now
-  feel ~200ms faster.
-- **Verification log**: `touch::next_click_count` logs
-  `multi_click: source=… count=N window=… slop=…` at debug level
-  whenever count > 1. Turn on `"log": {"gpui_android": "debug"}`,
-  plug in a Bluetooth mouse, double-click a word in the editor, then
-  look for `multi_click` in `zed: open log`; logcat stops at info.
-  Expected output for mouse:
-  `source=Mouse count=2 window=300ms slop=3 button=Left`.
-  Synthetic `adb shell input mouse tap` works but the device must be
-  unlocked + Zdroid focused; locked-device synthetic taps go to the
-  lockscreen window, not us. Real-mouse verification on device still
-  to be done by hand.
-- **Pointer capture (deferred)**: `view.requestPointerCapture()` for
-  Samsung Book Cover trackpad in non-DeX mode (which collapses
-  multi-finger gestures to single-pointer relative motion, so
-  two-finger scroll doesn't work) is intentionally deferred. Only
-  worth doing if a user actually hits it on Tab S9 in tablet mode;
-  cost is rendering our own cursor sprite while captured.
-
 What it ISN'T yet: minimal-latency. Several small things compound
 to ~5-10ms of cumulative input→paint overhead the user perceives as
 "native-looking but not native-feeling," especially during scroll
