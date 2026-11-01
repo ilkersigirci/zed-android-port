@@ -8,9 +8,7 @@
 #   repository are signed with the release key so their APKs install as an
 #   update over a release (a different package name would clash with the
 #   release's document provider, and the runtime binds com.zdroid's data
-#   paths). Pull requests from forks never receive the key. Pushes and pull
-#   requests skip the build when no code changed since the branch's last
-#   successful run, whose artifact is then still the current APK.
+#   paths). Pull requests from forks never receive the key.
 #
 # The build job never sees the signing key. It builds an unsigned APK, and
 # the sign job signs it with apksigner and checks its certificate, so crate
@@ -23,7 +21,9 @@ on:
   push:
     branches: [zdroid]
     tags: ["v*.*.*"]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
 
 permissions: {}
@@ -49,50 +49,8 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  changes:
-    name: Check for code changes
-    # `paths-ignore` can't decide this: on a pull request it looks at the whole
-    # pull request's diff, so once one has code, every docs commit builds again.
-    # Comparing with the last successful run rather than the last commit means
-    # that code whose build failed, or was cancelled by the next push, still
-    # builds.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read # find the last successful run
-      contents: read # compare the commits
-    outputs:
-      code: ${{ steps.check.outputs.code }}
-    steps:
-      - name: Compare with the last successful run
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          # Everything else counts as code: the workflows, and other markdown,
-          # since some of it is compiled into the app.
-          NOT_CODE: '(^|/)docs/|(^|/)README\.md$|^[^/]+\.md$|^\.github/[^/]+$|^\.github/(ISSUE_TEMPLATE|release|scripts)/'
-        run: |
-          # Tags and manual runs always build, as does anything GitHub can't
-          # answer for.
-          code=true
-          if [ "$GITHUB_REF_TYPE" != tag ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] \
-            && built=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/zdroid_apk.yml/runs" \
-              -f branch="$BRANCH" -f event="$GITHUB_EVENT_NAME" -f status=success -F per_page=1 \
-              --jq '.workflow_runs[0].head_sha // empty') \
-            && [ -n "$built" ] \
-            && files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$built...$HEAD_SHA?per_page=100" --jq '.files[].filename') \
-            && ! printf '%s' "$files" | grep -qvE "$NOT_CODE"; then
-            code=false
-            echo "::notice::No code changed since $built, so nothing builds here. That commit's run has the APK."
-          fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-
   test:
     name: Test fork crates
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     # Host tests for the fork's own crates that build outside Android. Of
     # gpui_android, only the project importer does.
     runs-on: ubuntu-24.04
@@ -141,8 +99,6 @@ jobs:
 
   build:
     name: Build APK
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
