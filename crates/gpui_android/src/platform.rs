@@ -159,6 +159,27 @@ pub(crate) fn frame_presented() {
     LAST_PRESENT_AT.set(Some(Instant::now()));
 }
 
+/// Dispatches the next step of a window's trackpad glide, and asks for another
+/// vsync while it runs. A hidden window's glide stops.
+fn advance_trackpad_glide(window_ptr: &crate::window::AndroidWindowStatePtr) {
+    let visible = window_ptr.is_visible();
+    let (step, gliding) = {
+        let mut state = window_ptr.state.borrow_mut();
+        if !visible {
+            state.trackpad_scroll.stop_glide();
+            return;
+        }
+        let step = state.trackpad_scroll.tick();
+        (step, state.trackpad_scroll.is_gliding())
+    };
+    if let Some(event) = step {
+        window_ptr.handle_input(PlatformInput::Scroll(event));
+    }
+    if gliding {
+        request_frame_callback();
+    }
+}
+
 /// Requests the first frame on the calling thread, which must have a Looper
 /// attached (android-activity's main thread does).
 fn install_choreographer_callback() {
@@ -580,7 +601,7 @@ impl AndroidPlatform {
             gpu_context,
             appearance,
             self.android_app.clone(),
-            self.android_gestures().tuning.touch_slop,
+            self.android_gestures().tuning,
         );
         window.ptr().state.borrow_mut().extra_window_id = Some(window_id);
         if let Err(err) = window.ptr().attach_surface(native_window, scale_factor) {
@@ -830,20 +851,29 @@ impl AndroidPlatform {
                     crate::multi_window::unmark_window_registered(window_id);
                 }
                 ExtraWindowEvent::Motion { window_id, motion } => {
-                    let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
+                    let entry = if window_id == crate::insets::PRIMARY_WINDOW_ID {
+                        self.common.borrow().window.clone()
+                    } else {
+                        self.common.borrow().extra_windows.get(&window_id).cloned()
+                    };
                     let Some(state) = entry else {
                         log::warn!(
                             "drain_extra_window_events: Motion for unknown windowId={window_id}"
                         );
                         continue;
                     };
-                    let translated = {
+                    let (translated, gliding) = {
                         let mut window_state = state.state.borrow_mut();
                         let scale = window_state.scale_factor;
-                        crate::events::translate_motion(motion, scale, &mut window_state)
+                        let translated =
+                            crate::events::translate_motion(motion, scale, &mut window_state);
+                        (translated, window_state.trackpad_scroll.is_gliding())
                     };
                     for input in translated.inputs {
                         touch_moves.dispatch(&state, input);
+                    }
+                    if gliding {
+                        request_frame_callback();
                     }
                 }
                 ExtraWindowEvent::Key {
@@ -1585,6 +1615,11 @@ impl Platform for AndroidPlatform {
                         common.extra_windows.values().cloned().collect::<Vec<_>>(),
                     )
                 };
+                // A trackpad scroll's glide steps on the vsync, before the
+                // windows paint it.
+                for window_ptr in primary.iter().chain(&extras) {
+                    advance_trackpad_glide(window_ptr);
+                }
                 // While frames that present run back to back (scrolling,
                 // animations), ask for the next vsync before painting, as
                 // Android's own animations do: a paint that overruns the
@@ -1724,7 +1759,7 @@ impl Platform for AndroidPlatform {
             gpu_context,
             appearance,
             self.android_app.clone(),
-            self.android_gestures().tuning.touch_slop,
+            self.android_gestures().tuning,
         );
 
         let native_window = self.android_app.native_window().ok_or_else(|| {

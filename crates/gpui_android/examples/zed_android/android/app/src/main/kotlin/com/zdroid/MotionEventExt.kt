@@ -7,15 +7,45 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
-/// Android reports a trackpad's two-finger scroll as one fake finger that moves
-/// with the scroll, and marks it with this classification. gpui's touch recognizer
-/// then pans and flings it as it does a finger on the screen, which is what Android
-/// intends: it leaves the fling to the app so that the two feel the same. Rust
-/// reads the source because GameActivity's events don't carry the classification.
-internal fun MotionEvent.markTrackpadScrollAsTouch() {
-    if (classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE) {
-        source = InputDevice.SOURCE_TOUCHSCREEN
+/// Whether Android recognized this as a gesture on a trackpad, such as a two-finger
+/// scroll or a pinch, and reports it with fake fingers. The classifications of a
+/// touchscreen's events have that source instead.
+internal val MotionEvent.isTrackpadGesture: Boolean
+    get() = isFromSource(InputDevice.SOURCE_MOUSE) &&
+        classification != MotionEvent.CLASSIFICATION_NONE
+
+/// Sends this event to Rust over JNI, for a window without GameActivity's input
+/// queue, or one whose classification that queue would lose.
+internal fun MotionEvent.forwardTo(windowId: Long) {
+    if (pointerCount <= 0) return
+    val xs = FloatArray(pointerCount)
+    val ys = FloatArray(pointerCount)
+    val ids = IntArray(pointerCount)
+    val toolTypes = IntArray(pointerCount)
+    for (i in 0 until pointerCount) {
+        xs[i] = getX(i)
+        ys[i] = getY(i)
+        ids[i] = getPointerId(i)
+        toolTypes[i] = getToolType(i)
     }
+    NativeBridge.nativeOnMotionEvent(
+        windowId,
+        actionMasked,
+        actionIndex,
+        source,
+        buttonState,
+        metaState,
+        flags,
+        classification,
+        // ACTION_SCROLL (the mouse wheel) carries its delta on these axes. They're
+        // zero on other events, and Rust only reads them for a scroll.
+        getAxisValue(MotionEvent.AXIS_VSCROLL),
+        getAxisValue(MotionEvent.AXIS_HSCROLL),
+        xs,
+        ys,
+        ids,
+        toolTypes,
+    )
 }
 
 /// Draws behind the system bars and the cutout, so gpui's surface gets the

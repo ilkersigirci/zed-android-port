@@ -52,7 +52,15 @@ Zed shows a tab's close button on hover, which a finger can't do, so the app's d
 - Builds on: the `tabs.show_close_button` setting (`ShowCloseButton`).
 - Landed upstream when: `crates/workspace/src/pane.rs` shows the close button for touch input, for example by checking `Window::last_input_was_touch`.
 
-## (g) Long press drags
+## (g) Trackpad scrolls glide
+
+A two-finger scroll on a trackpad keeps gliding after the fingers lift, with the velocity estimate and fling curve of touch pans, and a finger landing on the pad stops it. Android leaves that glide to the app, as UIKit does on iPadOS.
+
+- Ours: `PointerFling` in `crates/gpui/src/gestures.rs`, fed by `TrackpadScroll` in `crates/gpui_android/src/events/mouse.rs` and advanced once per vsync by `advance_trackpad_glide` in `crates/gpui_android/src/platform.rs`.
+- Builds on: gpui's private `VelocityTracker`, `Momentum` and `ScrollPhysics::fling_distance`, the pieces its touch recognizer flings with.
+- Landed upstream when: gpui synthesizes momentum for `ScrollSource::Pointer` scrolls. Upstream's iOS trackpad scrolling (#65805) says its scrolls stop when the fingers lift; check `crates/gpui_ios` and `crates/gpui/src/window.rs` for pointer momentum.
+
+## (h) Long press drags
 
 A long press on an element gpui can drag, such as a tab or a project panel entry, acts as a held left button, so the finger moves it with gpui's own drag and drop. Such an element no longer shows its tooltip on a long press, which gpui otherwise does, since both would claim the gesture.
 

@@ -12,10 +12,11 @@ use raw_window_handle as rwh;
 
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, Corners, DevicePixels, DispatchEventResult, Edges,
-    FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    Scene, Size, TextInputStateChange, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowInsets, WindowParams, WindowVisibility, point, px, size,
+    FrameRequestSource, GestureTuning, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, Scene, Size, TextInputStateChange, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
+    WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
@@ -134,6 +135,7 @@ pub(crate) struct AndroidWindowState {
     /// The held button and the run of clicks, per window so that a click in
     /// one window doesn't continue a double click in another.
     pub(crate) mouse: crate::events::mouse::MouseState,
+    pub(crate) trackpad_scroll: crate::events::mouse::TrackpadScroll,
     /// Feeds finger gestures to gpui's own touch gesture recognizer. Each
     /// window's touchscreen events are isolated.
     pub(crate) touch_feed: crate::touch::TouchFeed,
@@ -632,15 +634,13 @@ impl AndroidWindow {
         crate::ime::request_keyboard(&android_app, extra_window_id, show);
     }
 
-    /// `touch_slop` is the one gpui's touch recognizer uses, in logical
-    /// pixels.
     pub(crate) fn new(
         handle: AnyWindowHandle,
         _params: WindowParams,
         gpu_context: GpuContext,
         appearance: WindowAppearance,
         android_app: AndroidApp,
-        touch_slop: Pixels,
+        tuning: GestureTuning,
     ) -> Self {
         let display: Rc<dyn PlatformDisplay> = Rc::new(AndroidDisplay::new());
         let bounds = display.bounds();
@@ -673,7 +673,8 @@ impl AndroidWindow {
             capslock: Capslock::default(),
             android_app,
             mouse: crate::events::mouse::MouseState::default(),
-            touch_feed: crate::touch::TouchFeed::new(touch_slop),
+            trackpad_scroll: crate::events::mouse::TrackpadScroll::new(tuning),
+            touch_feed: crate::touch::TouchFeed::new(tuning.touch_slop),
             extra_window_id: None,
             ime_composition_start: None,
             ime_composition_text: None,

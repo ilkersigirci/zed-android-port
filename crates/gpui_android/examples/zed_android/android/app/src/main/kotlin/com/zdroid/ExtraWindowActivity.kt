@@ -4,7 +4,6 @@ import android.app.ActivityManager
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.appcompat.app.AppCompatActivity
@@ -27,7 +26,7 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
     private var surfaceView: SurfaceView? = null
 
     // No extras row here: its code-navigation keys are for the main editor.
-    override val ime: WindowIme by lazy { WindowIme(this, windowId) }
+    override val ime: WindowIme by lazy { WindowIme(this, windowId, { surfaceView }) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,18 +63,18 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
             holder.addCallback(SurfaceCallback(id))
             // Returning true keeps the gesture from the OS chrome's drag handle.
             setOnTouchListener { _, event ->
-                forwardTouchEvent(id, event)
+                event.forwardTo(id)
                 true
             }
             // Hover (a mouse moving with no button pressed) arrives here, not
             // through the touch listener.
             setOnHoverListener { _, event ->
-                forwardTouchEvent(id, event)
+                event.forwardTo(id)
                 true
             }
             // The mouse wheel.
             setOnGenericMotionListener { _, event ->
-                forwardTouchEvent(id, event)
+                event.forwardTo(id)
                 true
             }
             isFocusable = true
@@ -179,41 +178,6 @@ class ExtraWindowActivity : AppCompatActivity(), ZdroidWindow {
             Log.i(TAG, "surfaceDestroyed windowId=$id")
             NativeBridge.nativeOnExtraSurfaceDestroyed(id)
         }
-    }
-
-    private fun forwardTouchEvent(id: Long, event: MotionEvent) {
-        val pointerCount = event.pointerCount
-        if (pointerCount <= 0) return
-        event.markTrackpadScrollAsTouch()
-        val xs = FloatArray(pointerCount)
-        val ys = FloatArray(pointerCount)
-        val ids = IntArray(pointerCount)
-        val toolTypes = IntArray(pointerCount)
-        for (i in 0 until pointerCount) {
-            xs[i] = event.getX(i)
-            ys[i] = event.getY(i)
-            ids[i] = event.getPointerId(i)
-            toolTypes[i] = event.getToolType(i)
-        }
-        // ACTION_SCROLL (the mouse wheel) carries its delta on these axes. They're
-        // zero on other events, and Rust only reads them for a scroll.
-        val vscroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hscroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        NativeBridge.nativeOnExtraTouchEvent(
-            id,
-            event.actionMasked,
-            event.actionIndex,
-            event.source,
-            event.buttonState,
-            event.metaState,
-            event.flags,
-            vscroll,
-            hscroll,
-            xs,
-            ys,
-            ids,
-            toolTypes,
-        )
     }
 
     companion object {

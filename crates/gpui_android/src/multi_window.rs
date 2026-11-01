@@ -83,9 +83,9 @@ pub(crate) enum ExtraWindowEvent {
     /// then reap our maps. The `GlobalRef` for the Activity has already been
     /// dropped from `EXTRA_ACTIVITY_REFS` by the time this event fires.
     OsClosed { window_id: u64 },
-    /// Touch / pointer event on the extra `SurfaceView`. Raw fields from the
-    /// Java `MotionEvent`; the platform translates them on the game thread to
-    /// avoid touching the JNI env from a non-UI thread.
+    /// A touch or pointer event from Java: any on an extra window's `SurfaceView`,
+    /// and the main window's trackpad gestures. The platform translates it on the
+    /// game thread.
     Motion { window_id: u64, motion: Motion },
     /// Hardware key event on the extra window. Raw fields from the Java
     /// `KeyEvent`; same off-thread translation policy as `Motion`. Without
@@ -537,7 +537,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraFocusChanged<'l
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'local>(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnMotionEvent<'local>(
     mut env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -547,6 +547,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     button_state: i32,
     meta_state: i32,
     flags: i32,
+    classification: i32,
     vscroll: f32,
     hscroll: f32,
     xs: JFloatArray<'local>,
@@ -555,9 +556,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     tool_types: JIntArray<'local>,
 ) {
     let window_id = window_id as u64;
-    log::debug!(
-        "multi_window: nativeOnExtraTouchEvent windowId={window_id} action={action_masked}"
-    );
+    log::debug!("multi_window: nativeOnMotionEvent windowId={window_id} action={action_masked}");
     let pointers = match read_pointers(&mut env, &xs, &ys, &pointer_ids, &tool_types) {
         Ok(pointers) => pointers,
         Err(err) => {
@@ -574,6 +573,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
             meta_state: MetaState(meta_state as u32),
             button_state: button_state as u32,
             canceled: flags as u32 & crate::events::FLAG_CANCELED != 0,
+            classification,
             vscroll,
             hscroll,
             pointers,

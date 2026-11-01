@@ -75,6 +75,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
     override val ime = WindowIme(
         this,
         PRIMARY_WINDOW_ID,
+        surface = { surfaceView() },
         // The row covers the window above the keyboard, so it counts as covered.
         keyboardAccessoryHeight = {
             extraKeysView?.takeIf { it.visibility == View.VISIBLE }?.height ?: 0
@@ -252,8 +253,19 @@ class MainActivity : GameActivity(), ZdroidWindow {
         return super.onGenericMotionEvent(event)
     }
 
+    /// A trackpad's gestures are fake fingers to Android. They go to Rust with
+    /// their classification, which GameActivity's events don't carry, before any
+    /// view can take them for touches.
+    override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
+        if (event?.isTrackpadGesture == true) {
+            offsetEventToSurface(event)
+            event.forwardTo(PRIMARY_WINDOW_ID)
+            return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        event.markTrackpadScrollAsTouch()
         offsetEventToSurface(event)
         return super.onTouchEvent(event)
     }

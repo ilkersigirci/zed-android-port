@@ -6,7 +6,7 @@
 - `crates/gpui_android/examples/zed_android/android/app/src/main/kotlin/com/zdroid/ExtraWindowActivity.kt`
 - `crates/gpui_android/examples/zed_android/android/app/src/main/kotlin/com/zdroid/NativeBridge.kt`
 - `crates/gpui_android/src/events.rs` (`translate_motion`)
-- `crates/gpui_android/src/multi_window.rs` (`Java_..._nativeOnExtraTouchEvent` + `ExtraWindowEvent::Motion`)
+- `crates/gpui_android/src/multi_window.rs` (`Java_..._nativeOnMotionEvent` + `ExtraWindowEvent::Motion`)
 - `crates/gpui_android/src/platform.rs` (Motion drain arm)
 
 ## Symptom
@@ -61,7 +61,7 @@ chrome (drag handle, freeform resize edges) doesn't try to re-route it.
 `ACTION_SCROLL` carries its delta in `event.getAxisValue(AXIS_VSCROLL)`
 / `AXIS_HSCROLL` — `getX/Y` return the pointer position, NOT the scroll
 amount. The Kotlin side reads both axes unconditionally; they're zero
-on non-scroll events. Rust-side `Java_..._nativeOnExtraTouchEvent` and
+on non-scroll events. Rust-side `Java_..._nativeOnMotionEvent` and
 `ExtraWindowEvent::Motion` carry them through.
 
 ### 3. One translator
@@ -80,8 +80,8 @@ extra window treats a mouse, a stylus and a finger as the main window does.
 - `event.getAxisValue(AXIS_VSCROLL)` not extracted on the Kotlin side
   → mouse wheel returns zero delta, scroll fires but moves nothing.
   Subtle: action arm runs, no panic, just a no-op.
-- New extern fn signature in `nativeOnExtraTouchEvent` not matched on
-  the Kotlin `external fun nativeOnExtraTouchEvent(...)` side → JNI
+- New extern fn signature in `nativeOnMotionEvent` not matched on
+  the Kotlin `external fun nativeOnMotionEvent(...)` side → JNI
   signature mismatch crash on first touch event in any extra window.
   `UnsatisfiedLinkError` at the call site, not at load time.
 

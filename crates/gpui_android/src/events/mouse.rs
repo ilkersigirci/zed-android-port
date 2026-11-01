@@ -1,12 +1,14 @@
 //! Pointer input: a mouse, a stylus, and a trackpad, whose taps, presses and
-//! two-finger taps Android's input stack reports as a pointer's button presses.
+//! two-finger taps Android's input stack reports as a pointer's button presses,
+//! and whose two-finger swipes it reports as classified scrolls.
 
 use std::time::{Duration, Instant};
 
 use android_activity::input::MotionAction;
 use gpui::{
-    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
+    GestureTuning, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    NavigationDirection, Pixels, PlatformInput, Point, PointerFling, ScrollDelta, ScrollEvent,
+    ScrollSource, TouchPhase, point, px,
 };
 
 use super::Motion;
@@ -79,8 +81,8 @@ pub(crate) fn translate(motion: &Motion, state: &mut MouseState) -> Option<Platf
     let modifiers = modifiers_from_meta(motion.meta_state);
     match motion.action {
         MotionAction::Down => {
-            // One UI leaves the button out of a trackpad press at the screen's
-            // edge, and a stylus has none.
+            // A stylus has no button, and One UI can leave it out of a trackpad
+            // press.
             let button = button_from_state(motion.button_state).unwrap_or(MouseButton::Left);
             let click_count = state.next_click_count(button, position);
             state.held = Some(button);
@@ -112,6 +114,85 @@ pub(crate) fn translate(motion: &Motion, state: &mut MouseState) -> Option<Platf
         }
         MotionAction::Scroll => wheel_scroll(motion.vscroll, motion.hscroll, position, modifiers),
         _ => None,
+    }
+}
+
+/// A trackpad's two-finger scroll, which Android reports as one fake finger that
+/// starts where the pointer is and moves with the scroll. It's a pointer's scroll
+/// for gpui, as on iOS, not a touch: a touch could tap, long press, or grab a
+/// scrollbar or pane splitter under the pointer. Android leaves the glide after
+/// the fingers lift to the app.
+pub(crate) struct TrackpadScroll {
+    start: Point<Pixels>,
+    last: Point<Pixels>,
+    fling: PointerFling,
+}
+
+impl TrackpadScroll {
+    pub(crate) fn new(tuning: GestureTuning) -> Self {
+        Self {
+            start: Point::default(),
+            last: Point::default(),
+            fling: PointerFling::new(tuning),
+        }
+    }
+
+    pub(crate) fn translate(&mut self, motion: &Motion) -> Option<PlatformInput> {
+        let position = motion.pointers.first()?.position;
+        let (delta, touch_phase) = match motion.action {
+            MotionAction::Down => {
+                self.start = position;
+                self.last = position;
+                (Point::default(), TouchPhase::Started)
+            }
+            MotionAction::Move => {
+                let moved = position - self.last;
+                self.last = position;
+                let delta = invert_pixels(moved);
+                self.fling.scrolled(delta);
+                (delta, TouchPhase::Moved)
+            }
+            MotionAction::Up => {
+                self.fling.release(self.start);
+                // The glide's last step ends the scroll.
+                if self.fling.is_gliding() {
+                    return None;
+                }
+                (Point::default(), TouchPhase::Ended)
+            }
+            MotionAction::Cancel => {
+                self.fling.stop();
+                (Point::default(), TouchPhase::Cancelled)
+            }
+            _ => return None,
+        };
+        Some(PlatformInput::Scroll(ScrollEvent {
+            position: self.start,
+            delta: ScrollDelta::Pixels(delta),
+            modifiers: modifiers_from_meta(motion.meta_state),
+            touch_phase,
+            source: ScrollSource::Pointer,
+        }))
+    }
+
+    pub(crate) fn stop_glide(&mut self) {
+        self.fling.stop();
+    }
+
+    pub(crate) fn is_gliding(&self) -> bool {
+        self.fling.is_gliding()
+    }
+
+    /// The glide's scroll step for this frame, if one is running.
+    pub(crate) fn tick(&mut self) -> Option<ScrollEvent> {
+        self.fling.tick()
+    }
+}
+
+fn invert_pixels(delta: Point<Pixels>) -> Point<Pixels> {
+    match crate::ime::invert_scroll_delta(ScrollDelta::Pixels(delta)) {
+        ScrollDelta::Pixels(pixels) => pixels,
+        ScrollDelta::Lines(_) => delta,
     }
 }
 
@@ -197,7 +278,7 @@ mod tests {
     use android_activity::input::{MetaState, Source, ToolType};
 
     use super::*;
-    use crate::events::MotionPointer;
+    use crate::events::{CLASSIFICATION_NONE, CLASSIFICATION_TWO_FINGER_SWIPE, MotionPointer};
 
     fn motion(action: MotionAction, button_state: u32, x: f32) -> Motion {
         Motion {
@@ -207,6 +288,7 @@ mod tests {
             meta_state: MetaState(0),
             button_state,
             canceled: false,
+            classification: CLASSIFICATION_NONE,
             vscroll: 0.0,
             hscroll: 0.0,
             pointers: vec![MotionPointer {
@@ -290,6 +372,70 @@ mod tests {
         assert!(translate(&motion(MotionAction::Up, 0, 10.), &mut state).is_none());
         assert!(translate(&motion(MotionAction::HoverExit, 0, 10.), &mut state).is_none());
         assert!(translate(&motion(MotionAction::ButtonPress, 1, 10.), &mut state).is_none());
+    }
+
+    #[test]
+    fn only_a_pointer_event_with_a_classification_is_a_trackpad_gesture() {
+        /// `MotionEvent.CLASSIFICATION_DEEP_PRESS`, which is a touchscreen's.
+        const CLASSIFICATION_DEEP_PRESS: i32 = 2;
+        /// `MotionEvent.CLASSIFICATION_PINCH`.
+        const CLASSIFICATION_PINCH: i32 = 5;
+
+        let mut event = motion(MotionAction::Down, 0, 10.);
+        assert!(!event.is_trackpad_gesture());
+        for classification in [CLASSIFICATION_TWO_FINGER_SWIPE, CLASSIFICATION_PINCH] {
+            event.classification = classification;
+            assert!(event.is_trackpad_gesture());
+        }
+        event.source = Source::Touchscreen;
+        event.classification = CLASSIFICATION_DEEP_PRESS;
+        assert!(!event.is_trackpad_gesture());
+    }
+
+    fn scroll(scroll: &mut TrackpadScroll, action: MotionAction, x: f32) -> Option<ScrollEvent> {
+        match scroll.translate(&motion(action, 0, x)) {
+            Some(PlatformInput::Scroll(event)) => Some(event),
+            Some(other) => panic!("expected a scroll, got {other:?}"),
+            None => None,
+        }
+    }
+
+    #[test]
+    fn a_two_finger_swipe_scrolls_where_it_started_by_how_far_it_moved() {
+        let mut trackpad = TrackpadScroll::new(GestureTuning::default());
+        let started = scroll(&mut trackpad, MotionAction::Down, 100.).unwrap();
+        assert_eq!(started.touch_phase, TouchPhase::Started);
+        assert_eq!(started.position.x, px(100.));
+        assert_eq!(started.source, ScrollSource::Pointer);
+
+        for (x, expected) in [(130., 30.), (120., -10.)] {
+            let moved = scroll(&mut trackpad, MotionAction::Move, x).unwrap();
+            assert_eq!(moved.touch_phase, TouchPhase::Moved);
+            assert_eq!(moved.position.x, px(100.));
+            assert!(matches!(
+                moved.delta,
+                ScrollDelta::Pixels(delta) if delta.x == px(expected)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_two_finger_swipe_that_stops_before_lifting_ends_without_a_glide() {
+        let mut trackpad = TrackpadScroll::new(GestureTuning::default());
+        scroll(&mut trackpad, MotionAction::Down, 100.);
+        let ended = scroll(&mut trackpad, MotionAction::Up, 100.).unwrap();
+        assert_eq!(ended.touch_phase, TouchPhase::Ended);
+        assert!(!trackpad.is_gliding());
+    }
+
+    #[test]
+    fn a_cancelled_two_finger_swipe_scrolls_no_further() {
+        let mut trackpad = TrackpadScroll::new(GestureTuning::default());
+        scroll(&mut trackpad, MotionAction::Down, 100.);
+        let cancelled = scroll(&mut trackpad, MotionAction::Cancel, 100.).unwrap();
+        assert_eq!(cancelled.touch_phase, TouchPhase::Cancelled);
+        assert!(!trackpad.is_gliding());
+        assert!(trackpad.tick().is_none());
     }
 
     #[test]

@@ -68,8 +68,8 @@ pub(crate) fn on_screen_keyboard_enabled() -> bool {
 pub(crate) static EXTRAS_ROW_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Mirrors `android_input.invert_scroll`. Written by the SettingsStore
-/// observer in `zed_android::lib::main`. When set, the mouse wheel's scroll
-/// deltas are negated. A trackpad's direction is Android's setting.
+/// observer in `zed_android::lib::main`. When set, the scroll deltas of a
+/// trackpad's two-finger scroll and the mouse wheel are negated.
 pub(crate) static INVERT_SCROLL: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn invert_scroll_enabled() -> bool {

@@ -147,10 +147,10 @@ pub(super) fn android_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-            SettingsPageItem::SectionHeader("Mouse"),
+            SettingsPageItem::SectionHeader("Trackpad and Mouse"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Invert Mouse Wheel",
-                description: "Reverse the mouse wheel's scroll direction. A trackpad's is in Android's settings, and scrolling with a finger isn't affected.",
+                title: "Invert Scroll Direction",
+                description: "Reverse the scroll direction of trackpads and the mouse wheel. Scrolling with a finger isn't affected.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.invert_scroll"),

@@ -1,7 +1,7 @@
 # Trackpads and mice go through Android's input stack
 
 **Status:** Active
-**Files:** `crates/gpui_android/src/events.rs`, `crates/gpui_android/src/events/mouse.rs`, `crates/gpui_android/src/touch.rs`, `MotionEventExt.kt` (`markTrackpadScrollAsTouch`)
+**Files:** `crates/gpui_android/src/events.rs`, `crates/gpui_android/src/events/mouse.rs`, `MotionEventExt.kt`, `MainActivity.kt` (`dispatchTouchEvent`), `WindowInsetsReporter.kt`
 
 ## What Android does
 
@@ -17,12 +17,24 @@ The Book Cover trackpad (`sec_touchpad_pogo`, `Classes: TOUCH | TOUCH_MT | TOUCH
 | Two-finger swipe | `DOWN`, `MOVE`, `UP` of one fake finger with `CLASSIFICATION_TWO_FINGER_SWIPE`, whose `x` and `y` move with the scroll |
 | Finger landing during a fling | That fake finger's `DOWN` and `CANCEL` |
 
-So gpui_android has two jobs. A pointer's events are a mouse's, in `events/mouse.rs`. The fake finger is a touch pan: gpui's recognizer pans and flings it as it does a finger on the screen, which is why Android leaves the fling to the app (`handleFling` in `GestureConverter.cpp`: consistency between touchscreen and touchpad flings). It passes the touch slop 10 to 42 ms after its `DOWN`, well before a long press.
+Android's SDK also has `CLASSIFICATION_PINCH` (not logged). Both classifications arrived in Android 14. Android leaves the fling to the app (`handleFling` in `GestureConverter.cpp`).
+
+## What gpui_android does with them
+
+A pointer's events are a mouse's, in `events/mouse.rs`. A pointer's event with a classification is a gesture, whose fake fingers aren't presses, and GameActivity's events don't carry the classification, so `MainActivity.dispatchTouchEvent` sends these over JNI before a view can take them for touches.
+
+A two-finger swipe is a pointer scroll, which is what `ScrollSource::Pointer` documents and what `gpui_ios` sends, with gpui's `PointerFling` for the glide. It isn't a touch: a touch could tap, long press, or grab a scrollbar or pane splitter under the pointer, and would switch gpui to touch input. A pinch does nothing yet.
+
+## The gesture areas
+
+Android documents `WindowInsets.Type.mandatorySystemGestures()` as areas where system gestures have priority and "may consume some or all touch input", and its guidance is to keep interactive content out of them. So `WindowInsetsReporter` gives the surface margins of that size, and the window's background shows in the strips. Only Android's report sets them, so a window with no such areas has no margins.
+
+With the system bars hidden (One UI 8, tablet mode, 2026-11-01), these areas are 46 px at the top and 38 px at the bottom. Trackpad taps in the bottom one reached One UI's `TaskbarWindow`, not the app, and fingers often missed Zed's status bar there.
 
 ## One UI's differences
 
-- A press with the pointer at the screen's edge reports `DOWN` with no button and private flags (`0x204000`), and one mid-screen press and slide did too. `events/mouse.rs` reads a `DOWN` with no button as the left one.
-- One logged run reported three one-finger presses and slides as `BUTTON_SECONDARY`, and the pad's kernel device also advertises `BTN_RIGHT`, so its firmware may have a right-click area. Raw recordings of one-finger presses at the middle, far left and far right of the pad only showed `BTN_MOUSE`.
+- A press with the pointer at the screen's edge reports `DOWN` with no button and private flags, and one mid-screen press and slide did too. `events/mouse.rs` reads a `DOWN` with no button as the left one.
+- The pad's firmware reports `BTN_RIGHT` when a press has two contacts on the pad and `BTN_MOUSE` with one, so a finger resting on the pad turns a press into a right-click (`getevent`, 2026-11-01).
 
 ## Settings
 

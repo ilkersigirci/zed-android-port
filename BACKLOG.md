@@ -43,7 +43,6 @@ The rest of 0.10.0's device checks passed on the tablet on 2026-10-30. These two
 
 Seen on the tablet while testing 0.11.0, none of them caused by that release:
 
-- **A finger often can't press the status bar's buttons.** In fullscreen with gesture navigation on One UI, Android's mandatory gesture area is the bottom 38 px and the status bar lies inside it. Logcat shows adb's taps there, and some of the owner's finger taps, reaching One UI's `TaskbarWindow` rather than Zdroid; a trackpad still reaches the buttons. The system bars have been hidden the same way since before this release, though 0.10.1 wasn't compared. Laying gpui out above `mandatorySystemGestures` would fix it, at the cost of that strip.
 - **A new window sits 45 px too low outside DeX.** Ctrl+Shift+N asks for the whole screen and One UI's freeform mode places it at `[0,45][2960,1893]`, which hides its status bar. Dragging or maximizing it from the caption is the way out. `compute_launch_bounds` could leave room for the caption.
 - **Alt reads "option" in shortcut hints.** `PlatformStyle::platform()` in `crates/ui` treats every OS it doesn't know as Mac. Changing it needs a look at its other uses.
 - **Vim logs `Didn't find an action named "collab_panel::ToggleFocus"`.** Harmless: Android doesn't register that action.
@@ -58,6 +57,7 @@ Not checked on the tablet:
 
 Considered and left as they are:
 
+- **A trackpad pinch does nothing.** gpui has `PinchEvent`, which the image viewer zooms with, and `translate_motion` could make one from `CLASSIFICATION_PINCH`'s two fake fingers. Nothing else in Zed uses it, and pinches never worked here.
 - **A second mouse button pressed while one is held does nothing.** Only `ACTION_DOWN` and `ACTION_UP` press and release a button in `events/mouse.rs`, which is all a chord would need `ACTION_BUTTON_PRESS` and `MotionEvent.getActionButton` for. Nothing in Zed uses chords.
 - **A long press doesn't vibrate.** Android's views call `performHapticFeedback(LONG_PRESS)` when a long press does something, so a drag starting from one would too. gpui has no call for it, and the reference tablet reports no vibrator capabilities and has touch feedback off, so it couldn't be felt or checked there.
 - **Paste in the terminal with an image on the clipboard sends Ctrl+V (since 0.12.0, from Zed's code).** Zed does this so that terminal agents can read the system clipboard themselves, which they can't on Android. In a shell, it makes the next key literal. Changing it would need an Android-only edit to `terminal_view.rs`.

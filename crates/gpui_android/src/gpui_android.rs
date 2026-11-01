@@ -70,8 +70,8 @@ pub(crate) fn programming_extras_row_enabled() -> bool {
 }
 
 /// Push the user's `android_input.invert_scroll` setting to the runtime
-/// atomic the mouse wheel reads. Same independent-of-pane-render rationale
-/// as the others.
+/// atomic that trackpad scrolls and the mouse wheel read. Same
+/// independent-of-pane-render rationale as the others.
 pub fn set_invert_scroll(enabled: bool) {
     ime::INVERT_SCROLL.store(enabled, std::sync::atomic::Ordering::Release);
 }

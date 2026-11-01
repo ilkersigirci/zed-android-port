@@ -7,9 +7,6 @@
 //! two-finger tap becomes a secondary click, and a two-finger drag a single touch
 //! at the fingers' centroid.
 //!
-//! A trackpad's two-finger scroll comes through here too, as the one finger
-//! Android reports it as (`markTrackpadScrollAsTouch` in `MotionEventExt.kt`).
-//!
 //! Each `AndroidWindowState` owns its own `TouchFeed`, so gestures in different
 //! windows can't interfere.
 
@@ -458,6 +455,7 @@ mod tests {
             meta_state: MetaState(0),
             button_state: 0,
             canceled: false,
+            classification: crate::events::CLASSIFICATION_NONE,
             vscroll: 0.0,
             hscroll: 0.0,
             pointers,

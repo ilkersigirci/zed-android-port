@@ -86,9 +86,9 @@ object NativeBridge {
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the
     /// `MotionEvent.AXIS_VSCROLL`/`AXIS_HSCROLL` values for `ACTION_SCROLL`
     /// events (the mouse wheel); zero on touch / hover / button events. `source`,
-    /// `buttonState` and `flags` are `MotionEvent`'s, and `toolTypes` each
-    /// pointer's `MotionEvent.getToolType`.
-    external fun nativeOnExtraTouchEvent(
+    /// `buttonState`, `flags` and `classification` are `MotionEvent`'s, and
+    /// `toolTypes` each pointer's `MotionEvent.getToolType`.
+    external fun nativeOnMotionEvent(
         windowId: Long,
         actionMasked: Int,
         actionIndex: Int,
@@ -96,6 +96,7 @@ object NativeBridge {
         buttonState: Int,
         metaState: Int,
         flags: Int,
+        classification: Int,
         vscroll: Float,
         hscroll: Float,
         xs: FloatArray,
