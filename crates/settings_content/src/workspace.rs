@@ -569,26 +569,6 @@ pub struct AndroidInputSettingsContent {
     ///
     /// Default: true
     pub on_screen_keyboard: Option<bool>,
-    /// MASTER toggle for the virtual trackpad feature. When true,
-    /// the status bar exposes a trackpad-mode icon and the user
-    /// can switch the screen between direct touch and a VNC-style
-    /// virtual mouse via that icon. When false, the icon is hidden
-    /// and the whole module is inert regardless of
-    /// [`trackpad_mode_active`].
-    ///
-    /// Default: false
-    pub trackpad_mode: Option<bool>,
-    /// RUNTIME state of the virtual trackpad: true means the
-    /// screen is currently acting as a virtual trackpad
-    /// (one-finger drag moves an on-screen cursor; tap clicks at
-    /// the cursor; two-finger tap right-clicks; two-finger drag
-    /// scrolls). Only honored when [`trackpad_mode`] (master) is
-    /// also true. Mutated by the status bar icon so the state
-    /// survives across launches, not edited directly through the
-    /// settings UI.
-    ///
-    /// Default: false
-    pub trackpad_mode_active: Option<bool>,
     /// Render a Termux-style programming extras row above the
     /// soft keyboard with Esc, Tab, Ctrl, Alt, and arrow keys.
     /// Ctrl and Alt are sticky modifiers: tap once to apply to the
@@ -601,9 +581,8 @@ pub struct AndroidInputSettingsContent {
     /// Default: false
     pub programming_extras_row: Option<bool>,
     /// Invert scroll direction (macOS-style natural vs traditional)
-    /// for the trackpad two-finger scroll and the mouse wheel. Affects
-    /// the hardware / Book Cover trackpad, the wheel, and the virtual
-    /// trackpad. Direct-touch finger scrolling is never inverted.
+    /// for the trackpad two-finger scroll and the mouse wheel.
+    /// Direct-touch finger scrolling is never inverted.
     ///
     /// Default: false
     pub invert_scroll: Option<bool>,

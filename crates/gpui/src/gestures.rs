@@ -1183,10 +1183,10 @@ fn quadratic_velocity_at_newest(times: &[f64], values: &[f64]) -> Option<f64> {
 }
 
 /// Momentum for pointer scrolls the platform reports without a glide of its
-/// own, with the velocity estimate and fling curve of touch pans. Android:
-/// gpui_android recognizes two-finger scrolls on a captured trackpad itself,
-/// and Android leaves their glide to the app, as UIKit does for `gpui_ios`'s
-/// trackpad scrolls. Remove once gpui synthesizes pointer momentum.
+/// own, with the velocity estimate and fling curve of touch pans. Android
+/// leaves the glide of a trackpad's two-finger scrolls to the app, as UIKit does
+/// for `gpui_ios`'s trackpad scrolls. Remove once gpui synthesizes pointer
+/// momentum.
 #[cfg(target_os = "android")]
 pub struct PointerFling {
     tuning: GestureTuning,

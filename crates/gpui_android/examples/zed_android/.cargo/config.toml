@@ -4,9 +4,7 @@
 # SSBS, but its kernel doesn't enable them, so they're turned back off. Of
 # the crypto extensions only AES and SHA-2 are on: other Armv9 chips may
 # lack SHA-3 and SM4, and Zed has no use for them. Devices with older CPUs
-# can't run this build. The fp16 this includes is also what `gemm-f16`
-# (pulled in via candle → audio → call → git_ui → project_panel) needs to
-# assemble its `fmla *.8h` SIMD path.
+# can't run this build.
 #
 # The rest shrinks the `.so`. Like Zed's `script/bundle-linux`, the linker
 # folds functions that compile to identical code; `-addrsig` records which

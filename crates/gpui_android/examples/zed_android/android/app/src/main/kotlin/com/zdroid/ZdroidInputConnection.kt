@@ -33,7 +33,8 @@ private inline fun debugLog(message: () -> String) {
 /// event. Returning `false` would cause the IME to fall back to
 /// posting the text as KeyEvents, which we explicitly don't want
 /// (loses composition info).
-class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(hostView, /* fullEditor = */ true) {
+class ZdroidInputConnection(hostView: View, private val host: ImeHost) :
+    BaseInputConnection(hostView, /* fullEditor = */ true) {
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         val s = text?.toString() ?: ""
@@ -53,8 +54,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
         // Multi-character commits skip the intercept and fall
         // through to the plain text path; CJK composition + paste
         // shouldn't be re-keyed.
-        val host = hostView.context as? ImeHost
-        val modifier = host?.extraKeysModifierState ?: 0
+        val modifier = host.extraKeysModifierState
         if (modifier != 0 && s.length == 1) {
             val keyMap = android.view.KeyCharacterMap
                 .load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
@@ -80,7 +80,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
                     combinedMeta,
                     0,
                 )
-                host?.clearExtrasPendingModifier()
+                host.clearExtrasPendingModifier()
                 return true
             }
         }
@@ -153,8 +153,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
         // (one-shot) modifiers clear on the key's UP so the modifier
         // spans the whole down/up pair; a latched modifier stays until
         // the user unlatches it on the row.
-        val host = hostView.context as? ImeHost
-        val modifier = host?.extraKeysModifierState ?: 0
+        val modifier = host.extraKeysModifierState
         val meta = event.metaState or modifier
         debugLog {
             "IC.sendKeyEvent w=$windowId action=${event.action} keyCode=${event.keyCode} " +
@@ -169,7 +168,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
             event.repeatCount,
         )
         if (modifier != 0 && event.action == KeyEvent.ACTION_UP) {
-            host?.clearExtrasPendingModifier()
+            host.clearExtrasPendingModifier()
         }
         return true
     }
@@ -186,18 +185,12 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
     // Without these, Gboard's state-sync model can't trust its
     // internal view, and it re-sends commits / compositions
     // defensively (the ~155ms duplicate setComposingText pattern we
-    // saw in the log). We answer from MainActivity's
-    // `ImeTextState` mirror, which Rust pushes via JNI on every text
-    // change.
+    // saw in the log). These answer from the `ImeTextState` Rust
+    // pushes on every text change.
 
-    private fun mirror(): ImeTextState =
-        (hostView.context as? ImeHost)?.getImeTextState() ?: ImeTextState.EMPTY
+    private fun mirror(): ImeTextState = host.getImeTextState() ?: ImeTextState.EMPTY
 
-    /// Identifier of the gpui window this host's input flows
-    /// into. Passed through to every `nativeIme*` JNI call so Rust
-    /// can route the event to the right window's
-    /// `PlatformInputHandler`. `0` = primary (MainActivity).
-    private val windowId: Long = (hostView.context as? ImeHost)?.imeWindowId ?: 0L
+    private val windowId: Long = host.imeWindowId
 
     override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence? {
         val text = mirror().textBeforeCursor(n)

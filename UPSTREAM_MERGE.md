@@ -48,7 +48,7 @@ These use normal 3-way merge. Expect occasional conflicts when upstream refactor
 
 ### Startup code the app copies (silent-staleness class)
 
-The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/zed/migrate.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand.
+The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/menu_bar.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand.
 
 ### Asset-selection sites (runtime OS)
 

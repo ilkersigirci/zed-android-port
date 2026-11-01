@@ -24,6 +24,10 @@ pub(crate) struct PhysicalInsets {
     pub(crate) obscured_bottom: i32,
 }
 
+/// The main window's id on the JNI bridge, `MainActivity.PRIMARY_WINDOW_ID`. Extra
+/// windows use their gpui-assigned non-zero `WindowId`.
+pub(crate) const PRIMARY_WINDOW_ID: u64 = 0;
+
 /// The latest insets of each window, by window id (`PRIMARY_WINDOW_ID` for
 /// `MainActivity`). The latest value rather than a queue: an Activity
 /// reports before Rust has opened its window, and only the latest matters.

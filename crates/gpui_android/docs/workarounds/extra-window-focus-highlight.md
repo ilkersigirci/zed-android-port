@@ -33,7 +33,7 @@ isFocusableInTouchMode = true
 defaultFocusHighlightEnabled = false
 ```
 
-`setDefaultFocusHighlightEnabled` is API 26, the app's `minSdk`.
+`setDefaultFocusHighlightEnabled` is API 26, below the app's `minSdk`.
 
 ## Why this works
 

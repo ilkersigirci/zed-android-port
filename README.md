@@ -36,7 +36,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/i
 
 ### First launch
 
-1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid (on Android 8 to 10 it is a permission dialog instead); turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
+1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid; turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
 2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
 3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; **Settings → Android → Allow Background Activity** asks for the exemption.
 
@@ -89,20 +89,14 @@ Each surface toggles in **Settings → Android** (or on the first-run onboarding
 - **Two-finger tap** for right-click
 - **Long-press** to select a word
 - **Long-press and drag** to extend the selection
+- **Long-press and drag** on a tab or a project panel entry moves it
 - **Scrollbar tap and drag** snaps the thumb to your finger and follows
 
-### Virtual trackpad mode
-Toggle the crosshair icon in the tab bar to turn touch into a pointer. Direct touch is disabled while it's on.
-- **One-finger drag** moves the cursor
-- **Tap** for left click, **two-finger tap** for right click
-- **Hold then drag** for text selection
-- **Two-finger drag** to scroll the content
-
 ### Hardware mouse / trackpad
-Plug in or pair a mouse, trackpad, or Book Cover Keyboard and it just works.
+Plug in or pair a mouse, trackpad, or Book Cover Keyboard and it just works, with Android's pointer, pointer speed and tap to click.
 - **Scroll wheel** and **two-finger trackpad scroll** to scroll
-- **Right-click** anywhere for context menus
-- The cursor hides when you switch to touch or typing and comes back on the next pointer event
+- **Right-click** or **two-finger tap** anywhere for context menus
+- **Press until the pad clicks and slide** to drag. **Tap, touch again and slide** does too, once Android's tap dragging is on: `adb shell settings put system touchpad_tap_dragging 1`
 
 > Working on Samsung tablets and most Android devices we've tested. If your mouse pairs but doesn't move the cursor (seen on some OnePlus / Oppo Pad ColorOS builds), [open an issue](https://github.com/Dylanmurzello/zed-android-port/issues/new) with `adb shell dumpsys input` output so we can triage.
 
@@ -198,7 +192,7 @@ You'll need:
 cd crates/gpui_android/examples/zed_android
 
 ANDROID_NDK_HOME=/path/to/ndk/27.0.12077973 \
-  cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build
+  cargo ndk -t arm64-v8a -P 31 -o android/app/src/main/jniLibs build
 
 cd android
 gradle assembleDebug
@@ -216,7 +210,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver, and release builds are compiled for its CPU. Other high-end devices from 2022 on should run them too (Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later), but older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Android 9+ and Vulkan 1.1 are required too, and only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
 
-A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized; see [`docs/workarounds/deferred-phone-form-factor-polish.md`](crates/gpui_android/docs/workarounds/deferred-phone-form-factor-polish.md).
+A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized.
 
 ---
 

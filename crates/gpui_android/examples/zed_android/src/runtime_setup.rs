@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use android_activity::AndroidApp;
+use android_activity::{AndroidApp, MainEvent, PollEvent};
 use anyhow::{Context as _, Result};
 use fs::Fs;
 use futures::StreamExt as _;
@@ -53,8 +53,11 @@ pub enum BootSetup {
     PreviousRuntime,
 }
 
-/// Extract the bundled image when no rootfs is installed. Runs before
-/// the editor shows; the splash covers the seconds it takes.
+/// Extract the bundled image when no rootfs is installed. Runs before the
+/// editor shows; the splash covers the seconds it takes. The extraction takes
+/// its own thread, because this thread has to keep answering the Activity's
+/// lifecycle commands: GameActivity holds Android's UI thread until it does,
+/// which came close to an "app not responding" prompt.
 pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
     if has_previous_runtime(runtime.data_path()) {
         log::warn!(
@@ -66,14 +69,35 @@ pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
         return BootSetup::AlreadyInstalled;
     }
     let started = Instant::now();
-    let result = gpui_android::runtime_links::bundled_rootfs_image(app).and_then(|mut image| {
-        install::install(
-            runtime,
-            &mut image,
-            &zdroid_runtime::nameservers(),
-            &zdroid_runtime::timezone(),
-            &mut LogProgressSink,
-        )
+    let result = std::thread::scope(|scope| {
+        let extraction = scope.spawn({
+            let app = app.clone();
+            move || {
+                gpui_android::runtime_links::bundled_rootfs_image(&app).and_then(|mut image| {
+                    install::install(
+                        runtime,
+                        &mut image,
+                        &zdroid_runtime::nameservers(),
+                        &zdroid_runtime::timezone(),
+                        &mut LogProgressSink,
+                    )
+                })
+            }
+        });
+        // gpui isn't listening yet. What these events leave behind, it reads
+        // when it opens its window, except the Activity going away:
+        // `MainActivity.onDestroy` waits for this thread to end, and the next
+        // launch sweeps what the extraction left in its staging folder.
+        while !extraction.is_finished() {
+            app.poll_events(Some(Duration::from_millis(50)), |event| {
+                if matches!(event, PollEvent::Main(MainEvent::Destroy)) {
+                    std::process::exit(0);
+                }
+            });
+        }
+        extraction
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the extraction thread panicked")))
     });
     match result {
         Ok(()) => {

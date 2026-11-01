@@ -11,7 +11,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
@@ -22,27 +22,7 @@ use jni::{
     sys::jboolean,
 };
 
-use crate::jni_env::with_activity;
-
-/// Process-global AndroidApp handle. Set once at boot via
-/// [`register_android_app`] by `gpui_android::run`; read by the public
-/// updater functions so callers (lib.rs action handler, auto-check
-/// task) don't have to thread an `AndroidApp` reference through their
-/// own state.
-static ANDROID_APP: OnceLock<AndroidApp> = OnceLock::new();
-
-/// Stash the AndroidApp for later use by the updater. Idempotent (the
-/// second set is silently dropped) so re-entry across Activity
-/// recreations doesn't error.
-pub fn register_android_app(app: AndroidApp) {
-    let _ = ANDROID_APP.set(app);
-}
-
-pub(crate) fn android_app() -> Result<&'static AndroidApp> {
-    ANDROID_APP
-        .get()
-        .ok_or_else(|| anyhow!("updater: AndroidApp not registered yet"))
-}
+use crate::jni_env::{android_app, call_main_activity_bool, with_activity};
 
 /// Repo we ship APK releases from. Kept here (not in a config file)
 /// so a malicious user-config tweak can't redirect the auto-updater
@@ -242,7 +222,7 @@ pub fn check_for_update() -> Result<UpdateCheck> {
 /// is how the updater absorbs asset-name drift between releases
 /// (see [`candidate_asset_names`] for the why). Returns an error only
 /// when ALL candidate URLs have failed. Streams the response body so
-/// we don't hold the full ~225 MB APK in memory. `on_progress` gets the
+/// we don't hold the whole APK in memory. `on_progress` gets the
 /// downloaded fraction each time the whole percentage changes, or `None`
 /// when the server sends no length.
 pub fn download_apk(
@@ -253,32 +233,9 @@ pub fn download_apk(
     if urls.is_empty() {
         return Err(anyhow!("download_apk: no candidate URLs"));
     }
-    let android_app = android_app()?;
-    // Use Context.getCacheDir() via JNI. `android_app.internal_data_path()`
-    // returns the FILES dir (`getFilesDir()`); the OS cache dir is its
-    // sibling, NOT a `cache/` subdirectory of files. Pre-v0.3.1 the
-    // updater wrote to `<filesDir>/cache/updater/`. One-time migration:
-    // if that directory exists from a previous attempt, wipe it so stale
-    // 225 MB APKs don't sit on disk forever.
-    let cache_root =
-        system_cache_dir(android_app).context("query Context.getCacheDir() via JNI")?;
-    let stale_dir = android_app
-        .internal_data_path()
-        .map(|p| p.join("cache").join(CACHE_SUBDIR));
-    if let Some(stale) = stale_dir.as_ref()
-        && stale.exists()
-        && stale != &cache_root.join(CACHE_SUBDIR)
-    {
-        if let Err(err) = std::fs::remove_dir_all(stale) {
-            log::warn!(
-                "updater: failed to wipe stale cache dir {}: {err:#}",
-                stale.display()
-            );
-        } else {
-            log::info!("updater: wiped stale cache dir {}", stale.display());
-        }
-    }
-    let cache_dir = cache_root.join(CACHE_SUBDIR);
+    let cache_dir = system_cache_dir(android_app()?)
+        .context("query Context.getCacheDir() via JNI")?
+        .join(CACHE_SUBDIR);
     std::fs::create_dir_all(&cache_dir).context("create updater cache dir")?;
     let dest = cache_dir.join(format!("zdroid-{tag}.apk"));
 
@@ -289,7 +246,7 @@ pub fn download_apk(
         // a 404 followed by a 200 doesn't leave a truncated file from
         // the 404 attempt under the same dest path.
         if dest.exists() {
-            let _ = std::fs::remove_file(&dest);
+            std::fs::remove_file(&dest).ok();
         }
         log::info!("updater: downloading {url} -> {}", dest.display());
         let resp = match agent.get(url).set("User-Agent", USER_AGENT).call() {
@@ -405,11 +362,7 @@ fn take_sender<T>(slot: &Mutex<Option<oneshot::Sender<T>>>) -> Option<oneshot::S
 
 /// Whether Android lets Zdroid install APKs ("Install unknown apps").
 pub fn can_install_updates() -> Result<bool> {
-    with_activity(android_app()?, |env, activity| {
-        Ok(env
-            .call_method(activity, "canInstallUpdates", "()Z", &[])?
-            .z()?)
-    })
+    call_main_activity_bool("canInstallUpdates")
 }
 
 /// Opens Zdroid's "Install unknown apps" settings page. The receiver
@@ -468,11 +421,7 @@ pub fn install_update(apk_path: &Path) -> Result<oneshot::Receiver<InstallOutcom
 /// case it ended up behind other apps. Returns false if Android hasn't
 /// asked yet.
 pub fn show_install_prompt() -> Result<bool> {
-    with_activity(android_app()?, |env, activity| {
-        Ok(env
-            .call_method(activity, "showUpdatePrompt", "()Z", &[])?
-            .z()?)
-    })
+    call_main_activity_bool("showUpdatePrompt")
 }
 
 #[unsafe(no_mangle)]

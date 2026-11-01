@@ -73,4 +73,3 @@ touch-style detection, emit `Down(Right)`/`Up(Right)` directly.
 ## See also
 
 - [first-mouse-tagging.md](first-mouse-tagging.md)
-- [jvm-clipboard-stack-overflow.md](jvm-clipboard-stack-overflow.md)

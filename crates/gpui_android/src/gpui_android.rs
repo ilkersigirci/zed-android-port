@@ -3,7 +3,6 @@
 
 pub mod askpass_install;
 pub mod background_mode;
-mod captured_pointer;
 mod clipboard;
 mod credentials;
 mod cursor;
@@ -11,7 +10,6 @@ mod dispatcher;
 mod display;
 pub mod dns_bridge;
 mod events;
-mod frame_timing;
 mod ime;
 mod insets;
 mod jni_env;
@@ -24,21 +22,20 @@ pub mod process_hygiene;
 pub mod project_import;
 pub mod runtime_links;
 pub mod runtime_service;
-mod saf;
 pub mod selinux_canary;
-pub(crate) mod splash;
 pub mod storage;
 pub mod system_properties;
+mod thermal;
 mod touch;
 pub mod updater;
 mod window;
 
-pub use platform::AndroidPlatform;
+pub use platform::{AndroidPlatform, PathPrompt, path_prompts};
 
 /// The `AndroidApp` handle `run` registered, for code that runs inside
 /// the gpui `App` without access to the one `android_main` received.
 pub fn android_app() -> anyhow::Result<&'static android_activity::AndroidApp> {
-    updater::android_app()
+    jni_env::android_app()
 }
 
 /// Push the user's `android_input.on_screen_keyboard` setting into
@@ -57,16 +54,6 @@ pub fn set_on_screen_keyboard_enabled(enabled: bool) {
     ime::ON_SCREEN_KEYBOARD_ENABLED.store(enabled, std::sync::atomic::Ordering::Release);
 }
 
-/// Push the user's effective trackpad-mode state (master AND active)
-/// into the runtime atomic the touch dispatcher reads to decide
-/// whether each touch event routes to the virtual-trackpad SM. Same
-/// rationale as [`set_on_screen_keyboard_enabled`]: must work
-/// independent of pane render so the gate is correct before any
-/// project is opened.
-pub fn set_trackpad_mode_enabled(enabled: bool) {
-    ime::TRACKPAD_MODE_ENABLED.store(enabled, std::sync::atomic::Ordering::Release);
-}
-
 /// Push the user's `android_input.programming_extras_row` setting
 /// to the runtime atomic. The platform reconcile loop forwards
 /// changes to Kotlin's `Activity.setProgrammingExtrasRowEnabled` so
@@ -83,9 +70,8 @@ pub(crate) fn programming_extras_row_enabled() -> bool {
 }
 
 /// Push the user's `android_input.invert_scroll` setting to the runtime
-/// atomic read by the captured-pointer synthesizer (trackpad two-finger
-/// scroll + mouse wheel) and the virtual-trackpad SM. Same independent-
-/// of-pane-render rationale as the others.
+/// atomic that trackpad scrolls and the mouse wheel read. Same
+/// independent-of-pane-render rationale as the others.
 pub fn set_invert_scroll(enabled: bool) {
     ime::INVERT_SCROLL.store(enabled, std::sync::atomic::Ordering::Release);
 }
@@ -131,12 +117,9 @@ pub fn application<A>(android_app: android_activity::AndroidApp, assets: A) -> g
 where
     A: gpui::AssetSource,
 {
-    // Stash a clone for the updater module so action handlers / auto-
-    // check tasks (which run inside the gpui App context with no
-    // direct access to the AndroidApp passed into this function) can
-    // get back to JNI calls. Set once per process — idempotent across
-    // Activity recreations.
-    updater::register_android_app(android_app.clone());
+    // For action handlers and the updater's tasks, which run inside the gpui
+    // App with no access to the AndroidApp passed in here.
+    jni_env::register_android_app(android_app.clone());
     let platform: Rc<dyn gpui::Platform> = Rc::new(AndroidPlatform::new(android_app, false));
     gpui::Application::with_platform(platform).with_assets(assets)
 }

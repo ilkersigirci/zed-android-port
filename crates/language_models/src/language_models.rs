@@ -1,3 +1,6 @@
+// Android leaves out some providers in `register_language_model_providers`.
+#![cfg_attr(target_os = "android", allow(unused_imports, unused_variables))]
+
 use std::sync::Arc;
 
 use ::settings::{Settings, SettingsStore};
@@ -222,16 +225,15 @@ fn register_language_model_providers(
     cx: &mut Context<LanguageModelRegistry>,
 ) {
     // Android uses direct providers without Zed accounts or hosted models.
-    if !cfg!(target_os = "android") {
-        registry.register_provider(
-            Arc::new(CloudLanguageModelProvider::new(
-                user_store,
-                client.clone(),
-                cx,
-            )),
+    #[cfg(not(target_os = "android"))]
+    registry.register_provider(
+        Arc::new(CloudLanguageModelProvider::new(
+            user_store,
+            client.clone(),
             cx,
-        );
-    }
+        )),
+        cx,
+    );
     registry.register_provider(
         Arc::new(AnthropicLanguageModelProvider::new(
             client.http_client(),
@@ -250,32 +252,33 @@ fn register_language_model_providers(
     );
     // Android leaves out the local model servers (Ollama, LM Studio,
     // llama.cpp). A remote one can be added as an OpenAI-compatible provider.
-    if !cfg!(target_os = "android") {
-        registry.register_provider(
-            Arc::new(OllamaLanguageModelProvider::new(
-                client.http_client(),
-                credentials_provider.clone(),
-                cx,
-            )),
+    #[cfg(not(target_os = "android"))]
+    registry.register_provider(
+        Arc::new(OllamaLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
             cx,
-        );
-        registry.register_provider(
-            Arc::new(LmStudioLanguageModelProvider::new(
-                client.http_client(),
-                credentials_provider.clone(),
-                cx,
-            )),
+        )),
+        cx,
+    );
+    #[cfg(not(target_os = "android"))]
+    registry.register_provider(
+        Arc::new(LmStudioLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
             cx,
-        );
-        registry.register_provider(
-            Arc::new(LlamaCppLanguageModelProvider::new(
-                client.http_client(),
-                credentials_provider.clone(),
-                cx,
-            )),
+        )),
+        cx,
+    );
+    #[cfg(not(target_os = "android"))]
+    registry.register_provider(
+        Arc::new(LlamaCppLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
             cx,
-        );
-    }
+        )),
+        cx,
+    );
     registry.register_provider(
         Arc::new(DeepSeekLanguageModelProvider::new(
             client.http_client(),

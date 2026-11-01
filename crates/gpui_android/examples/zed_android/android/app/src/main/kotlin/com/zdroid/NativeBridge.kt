@@ -13,6 +13,13 @@ import android.view.Surface
 /// `Java_com_zdroid_NativeBridge_<methodName>` symbols. Class name
 /// changes here require matching renames on the Rust side.
 object NativeBridge {
+    // Here rather than in `Application.onCreate`, which also runs when only the
+    // documents provider or a broadcast started the process: this library holds
+    // the whole editor. GameActivity also loads it, which changes nothing.
+    init {
+        System.loadLibrary("zed_android")
+    }
+
     /// Process-death recovery probe. `ExtraWindowActivity.onCreate` calls
     /// this BEFORE any other JNI work. Returns true if the gpui-side has a
     /// live AndroidWindow registered for this `windowId` (this Activity was
@@ -78,16 +85,18 @@ object NativeBridge {
     /// `MotionEvent` across the JNI boundary). Pointer indices are
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the
     /// `MotionEvent.AXIS_VSCROLL`/`AXIS_HSCROLL` values for `ACTION_SCROLL`
-    /// events (mouse wheel, trackpad two-finger scroll); zero on touch /
-    /// hover / button events. `flags` is `MotionEvent.getFlags()` and
+    /// events (the mouse wheel); zero on touch / hover / button events. `source`,
+    /// `buttonState`, `flags` and `classification` are `MotionEvent`'s, and
     /// `toolTypes` each pointer's `MotionEvent.getToolType`.
-    external fun nativeOnExtraTouchEvent(
+    external fun nativeOnMotionEvent(
         windowId: Long,
         actionMasked: Int,
         actionIndex: Int,
-        metaState: Int,
+        source: Int,
         buttonState: Int,
+        metaState: Int,
         flags: Int,
+        classification: Int,
         vscroll: Float,
         hscroll: Float,
         xs: FloatArray,
@@ -104,49 +113,17 @@ object NativeBridge {
     /// has focus but typing is a no-op.
     ///
     /// `action`: `KeyEvent.ACTION_DOWN` / `ACTION_UP`.
+    /// `deviceId`: `KeyEvent.getDeviceId()`, which selects the keyboard's layout.
     /// `keyCode`: AKEYCODE_*.
     /// `metaState`: META_* bitfield (shift/ctrl/alt/meta/caps lock state).
     /// `repeatCount`: 0 for the initial press, >0 for auto-repeat.
     external fun nativeOnExtraKeyEvent(
         windowId: Long,
         action: Int,
+        deviceId: Int,
         keyCode: Int,
         metaState: Int,
         repeatCount: Int,
-    )
-
-    /// True while a hold-and-drag gesture is in flight on the given
-    /// window's Rust-side state machine. Kotlin queries on every
-    /// multi-touch MOVE event to decide whether the on-screen cursor
-    /// sprite should follow the moving finger. Per-window because
-    /// each spawned `ExtraWindowActivity` has its own gesture state;
-    /// pass `0` for `MainActivity` (the primary window) and the
-    /// extra window's id for spawned windows.
-    external fun isHoldDragActive(windowId: Long): Boolean
-
-    /// MainActivity polls this flag to fade out its splash overlay after
-    /// gpui's first paint. The UI and gpui run on different threads.
-    external fun nativeIsZedReady(): Boolean
-
-    /// Captured-pointer sink, called only by [forwardCapturedPointer].
-    /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
-    /// window's id. `rxs`/`rys` are `AXIS_RELATIVE_X` /
-    /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
-    /// motion and scroll synthesis). `vscroll`/`hscroll` carry a
-    /// mouse wheel's `ACTION_SCROLL`.
-    external fun nativeOnCapturedPointer(
-        windowId: Long,
-        actionMasked: Int,
-        source: Int,
-        buttonState: Int,
-        metaState: Int,
-        pointerCount: Int,
-        rxs: FloatArray,
-        rys: FloatArray,
-        vscroll: Float,
-        hscroll: Float,
-        cursorPhysicalX: Float,
-        cursorPhysicalY: Float,
     )
 
     /// IME `commitText` from `ZdroidInputConnection`. Final text the
@@ -198,10 +175,9 @@ object NativeBridge {
     /// as motions and operators).
     external fun nativeImeRouteAsKeys(windowId: Long): Boolean
 
-    /// Mirror Kotlin's `imeShown` flag into the Rust-side global
-    /// `SOFT_KEYBOARD_VISIBLE` atomic. Pushed on every transition
-    /// (showSoftInput / hideSoftInputFromWindow / WindowInsetsListener
-    /// edge). The status bar keyboard button reads this via
+    /// Whether the on-screen keyboard is up, from [WindowIme], into the
+    /// Rust-side global `SOFT_KEYBOARD_VISIBLE` atomic. The status bar
+    /// keyboard button reads this via
     /// `gpui_android::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)

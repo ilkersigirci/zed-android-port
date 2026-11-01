@@ -9,20 +9,13 @@ use jni::objects::JValue;
 use util::ResultExt as _;
 
 pub fn is_enabled() -> bool {
-    crate::updater::android_app()
-        .and_then(|android_app| {
-            crate::jni_env::with_activity(android_app, |env, activity| {
-                Ok(env
-                    .call_method(activity, "isBackgroundModeEnabled", "()Z", &[])?
-                    .z()?)
-            })
-        })
+    crate::jni_env::call_main_activity_bool("isBackgroundModeEnabled")
         .log_err()
         .unwrap_or(false)
 }
 
 pub fn set_enabled(enabled: bool) -> Result<()> {
-    let android_app = crate::updater::android_app()?;
+    let android_app = crate::jni_env::android_app()?;
     crate::jni_env::with_activity(android_app, |env, activity| {
         env.call_method(
             activity,
