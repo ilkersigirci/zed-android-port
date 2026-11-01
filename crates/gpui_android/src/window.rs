@@ -537,6 +537,16 @@ impl AndroidWindowStatePtr {
     /// active `PlatformInputHandler` (gpui's text-input path) when the
     /// callback didn't claim them.
     pub(crate) fn handle_input(&self, input: PlatformInput) {
+        // Android repeats a held modifier key like any other, and gpui expects
+        // only real changes, as `last_reported_modifiers` in `gpui_windows`
+        // ensures. Zed's editor drops the link under a pressed button when told
+        // of one, so Ctrl+click did nothing with a mouse.
+        if let PlatformInput::ModifiersChanged(event) = &input {
+            let state = self.state.borrow();
+            if state.modifiers == event.modifiers && state.capslock == event.capslock {
+                return;
+            }
+        }
         self.record_pointer_state(&input);
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut callback) = callback {
