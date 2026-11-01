@@ -8,9 +8,9 @@
 #   repository are signed with the release key so their APKs install as an
 #   update over a release (a different package name would clash with the
 #   release's document provider, and the runtime binds com.zdroid's data
-#   paths). Pull requests from forks never receive the key. These skip the
-#   build when no code changed since the branch's last successful run, whose
-#   artifact is then still the current APK.
+#   paths). Pull requests from forks never receive the key. Pushes and pull
+#   requests skip the build when no code changed since the branch's last
+#   successful run, whose artifact is then still the current APK.
 #
 # The build job never sees the signing key. It builds an unsigned APK, and
 # the sign job signs it with apksigner and checks its certificate, so crate
