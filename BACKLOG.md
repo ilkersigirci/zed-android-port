@@ -20,9 +20,7 @@ A profile on 0.9.21 (2026-10-29) found `android_main` spending about 12.5 ms of 
 
 ## 0.19.1 device checks
 
-0.19.1 merges Zed v1.29.3 and renames the remote server Zdroid installs on an SSH host. On the tablet on 2026-11-21, Zdroid downloaded `zed-remote-server-zdroid-1.29.3`, removed an unused older `zdroid-1.29.1` and kept a running `zdroid-1.29.0` and a newer `zdroid-1.30.0`; desktop Zed's 1.29.3 server, started while Zdroid was disconnected, removed a `stable-1.29.1` placeholder and kept Zdroid's binary, and Zdroid then reconnected without downloading; the text finder's list emptied when the query stopped matching. Still to check:
-
-- Start a Claude and a Codex thread in the agent panel in an SSH project.
+0.19.1 merges Zed v1.29.3 and renames the remote server Zdroid installs on an SSH host. On the tablet on 2026-11-21, Zdroid downloaded `zed-remote-server-zdroid-1.29.3`, removed an unused older `zdroid-1.29.1` and kept a running `zdroid-1.29.0` and a newer `zdroid-1.30.0`; desktop Zed's 1.29.3 server, started while Zdroid was disconnected, removed a `stable-1.29.1` placeholder and kept Zdroid's binary, and Zdroid then reconnected without downloading; the text finder's list emptied when the query stopped matching. On 2026-11-22 with 0.20.0, a new Claude Agent thread and a new Codex thread in an SSH project on that host each answered, the server's agents running on the host, and Zdroid reconnected to its `zdroid-1.29.3` binary without downloading it again.
 
 ## 0.20.0 device checks
 
@@ -100,7 +98,6 @@ An audit of `crates/gpui_android`'s input code found 22 problems; these are stil
 **Mouse and trackpad**
 
 4. **Gpui is never told when the pointer leaves a window.** Android sends `HOVER_EXIT` before every press too, so it doesn't mean that. The hover-status callback is stored but never called, and `is_hovered` returns false, so hover highlights can stay after the pointer leaves.
-5. **S Pen buttons aren't mapped.** `button_from_state` ignores the stylus button bits, so the pen's side button doesn't right-click.
 
 **Touch**
 
