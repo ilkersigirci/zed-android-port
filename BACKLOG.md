@@ -24,6 +24,16 @@ A profile on 0.9.21 (2026-10-29) found `android_main` spending about 12.5 ms of 
 
 - Start a Claude and a Codex thread in the agent panel in an SSH project.
 
+## 0.20.0 device checks
+
+0.20.0 merges Dylan's 0.4.4: his release of this fork's 0.18.1 with his own fixes. Check:
+
+- **Settings → Android → Reset Runtime** asks in the Settings window, and **Cancel** leaves Settings open with nothing changed. Don't confirm: a reset removes the packages installed with apt. The question's text and buttons fit the window, and so do they when **zdroid runtime: reset runtime** from the command palette asks in the main window, also answered with **Cancel**. The palette doesn't list **reset runtime confirmed**.
+- **Open with** from the Files app opens the file in Zdroid. Dylan found that the app compared the handoff's token by identity, which a token that came back through an Intent never matches.
+- A tap with the S Pen's side button held opens the context menu, as a right-click does.
+- A finger drag that starts about 20 px beside a pane splitter moves it.
+- A new terminal's prompt shows `/root` (`~`), not `/data/user/0/com.zdroid/files/rootfs/root`.
+
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
 The Android audit, the review of that week's PR stack and the two upstream-divergence audits found these.
@@ -43,7 +53,6 @@ Seen on the tablet while testing 0.11.0, none of them caused by that release:
 Not checked on the tablet:
 
 - **Choose from Local Folders in the agent archive.** It only appears for an archived thread with no folder. None existed, and an empty window's agent panel has no message box to start one, so the keep-alive in `open_local_folder` has only been compiled.
-- **Swiping the app away during first-launch extraction.** It needs a clean install, which deletes the home folder, so try it on the next one.
 - **Dragging a scrollbar thumb with a finger, and pressing its track.** 0.14.0's merge conflicted in the code that claims these touch drags. Resizing a dock by dragging its edge with a finger works (seen). On 2026-11-12 the editor's minimap covered its scrollbar, and the touch drag there scrolled the text.
 
 Considered and left as they are:
@@ -110,3 +119,14 @@ Left from the 2026-08-07 merge, which brought upstream's mobile APIs, and upstre
 - **The `sandbox` crate on Android.** The app pulls it in through `agent`, `acp_thread` and `agent_ui`, and on Android its `wrap()` returns `SandboxError::UnsupportedPlatform`. Check which agent tool calls reach it and what the user sees then.
 - **Idle remote connections stop sending heartbeats.** In `crates/remote/src/remote_client.rs::heartbeat`, a successful ping takes the `continue` branch, which skips re-arming `keepalive_timer`, so the next ping waits until the server sends something. On the tablet (0.17.1, 2026-11-12) an idle SSH project sent nothing for minutes, and a stalled session went unnoticed until a file was opened; after that, five missed pings started the reconnect as intended. The code matches v1.29.3. Check: leave a remote project idle, `kill -STOP` its `sshd-session` on the host, and look for "No heartbeat from server" in logcat within 10 s.
 - **Closing a remote project leaves its connection open.** After Close Project on an SSH project, and after Remove Server on a server connected from the Open Remote dialog, the ssh master and the server's proxy kept running (0.17.1, 2026-11-12), so something still holds the project. `multi_workspace.rs` matches v1.29.3; not traced further. The master is Zdroid's child and ends with the app. Check: close the remote project, then `adb shell "ps -A | grep 'ssh -N'"` should list nothing.
+
+## Open items carried over from the pre-0.4.4 backlog
+
+The 0.4.4 merge took the contributor's rewrite of this file; these entries of ours were still open and are kept here.
+
+- **Mouse scroll direction reversed** (device report, 2026-05-13): Samsung One UI with a Bluetooth mouse scrolls inverted in Zdroid while every other app scrolls normally. The uncaptured wheel path passes vertical deltas through since 0.4.3; verify on One UI with a Bluetooth mouse before treating the report as resolved.
+- **The thermal frame cap.** `cmd thermalservice override-status 3` took effect, but `dumpsys SurfaceFlinger --latency` returned no frames for Zdroid's layer in that session, so the cap was never measured.
+- **The in-app update's install.** The updater compares `versionName`; its first real run is the update from 0.4.3 to 0.4.4. Installing the release by hand keeps the data if it fails.
+- **Swiping the app away during first-launch extraction.** Needs a clean install, which deletes the home folder; try it on the next wiped-device run.
+- **Speed against 0.9.23**, which ran its tools natively: rust-analyzer's first diagnostics and go to definition in a Rust project under `~/projects`, `cargo build`, and `git status` in a large repository, timed on the same project with both versions.
+- **Vim logs `Didn't find an action named "collab_panel::ToggleFocus"`.** Harmless: Android doesn't register that action.
