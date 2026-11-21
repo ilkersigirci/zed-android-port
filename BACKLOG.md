@@ -32,10 +32,7 @@ A profile on 0.9.21 (2026-10-29) found `android_main` spending about 12.5 ms of 
 - **Open with** opened the file in a new tab, both for a `file://` link and for a `content://media/…` link (sent with `am start` to `OpenFileActivity`; 0.19.1 ignored the same handoff).
 - A finger drag that started 20 px (logical) beside the divider between two panes moved it, keeping the finger's offset; 0.19.1's 16 px area wouldn't have reached. One that started 40 px beside it left the divider in place.
 - The environment a new terminal's shell gets from Zdroid has no `PWD`, `OLDPWD`, `SHLVL` or `LD_*`, its `SHLVL` is 1, and a login shell in the home folder shows `~`.
-
-Still to check:
-
-- A tap with the S Pen's side button held opens the context menu, as a right-click does.
+- A tap with the S Pen's side button held opened the context menu, as a right-click does (checked by the tablet's owner).
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
